@@ -1,0 +1,25 @@
+{
+    "defaultSites": [
+      {
+        "id": "a97e4d1c-6f4e-4f9d-b87d-29bd5b2c1a9e",
+        "identifier": "learn_mino",
+        "baseUrl": "https://learn.mino.randriamanivo.com",
+        "sitemapPath": "/sitemap.xml",
+        "type": "ghost"
+      },
+      {
+        "id": "9b8a4f8d-7a1f-4d3b-9b77-76a2b7f45678",
+        "identifier": "angano",
+        "baseUrl": "https://angano.com",
+        "sitemapPath": "/sitemap.xml",
+        "type": "ghost"
+      },
+      {
+        "id": "6b7c2d3e-8f1a-4b5c-9d2e-3f4a5b6c7d8e",
+        "identifier": "digigasy",
+        "baseUrl": "https://digigasy.com",
+        "sitemapPath": "/wp-sitemap.xml",
+        "type": "wordpress"
+      }
+    ]
+  }

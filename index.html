@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mamaki Content Manager</title>
+  <link rel="manifest" href="manifest.json" />
+  <!-- Instead of linking a CSS file, we load our style JS -->
+  <script src="style.js"></script>
+  <script src="db.js"></script>
+  <!-- Set the theme color (dark mode by default) -->
+  <meta name="theme-color" content="#121212" />
+</head>
+<body class="dark">
+  <!-- Header with title and dark/light mode toggle -->
+  <header>
+    <h1 id="headerTitle">Mamaki Content Manager</h1>
+    <div>
+      <span id="toggleMode" style="font-size: 2rem; cursor: pointer;">☀️</span>
+      <button id="updateVersion">Update Version</button>
+    </div>
+  </header>
+
+  <!-- Main container with sidebar for sitemap navigation and content area -->
+  <div class="container">
+    <!-- Sidebar: will display the sitemap (list of posts) -->
+    <nav id="menu">
+      <!-- You may include an input for filtering if needed -->
+      <input type="text" id="menuFilter" placeholder="Filter posts..." />
+      <!-- Menu items will be dynamically generated -->
+    </nav>
+
+    <!-- Main content area for displaying a post's content -->
+    <main id="content">
+      <p>Select a post from the left menu to view its content.</p>
+    </main>
+  </div>
+
+  <!-- Include main.js for functionality -->
+  <script src="main.js"></script>
+  <!-- Service Worker registration remains the same -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker
+          .register('service-worker.js')
+          .then(function (registration) {
+            console.log('ServiceWorker registered with scope:', registration.scope);
+          })
+          .catch(function (err) {
+            console.error('ServiceWorker registration failed:', err);
+          });
+      });
+    }
+  </script>
+</body>
+</html>
