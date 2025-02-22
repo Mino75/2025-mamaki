@@ -174,12 +174,28 @@ function getSite(id) {
 // Expose the function so that main.js can use it.
 window.getSite = getSite;
 
-
+/**
+ * Count the number of items in the specified store.
+ * @param {string} storeName - The name of the object store (e.g., "documents", "sites", "folders").
+ * @returns {Promise<number>} - A promise that resolves to the count of items.
+ */
+function countItems(storeName) {
+  return openDatabase().then(db => {
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([storeName], "readonly");
+      const store = transaction.objectStore(storeName);
+      const request = store.count();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = (event) =>
+        reject("Error counting items in " + storeName + ": " + event.target.error);
+    });
+  });
+}
 
 // Expose the functions so that main.js can use them.
 window.storeSite = storeSite;
 window.storeFolder = storeFolder;
 window.storeDocument = storeDocument;
 window.getDocument = getDocument;
-
+window.countItems = countItems;
 

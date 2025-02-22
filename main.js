@@ -3,6 +3,8 @@
 // Global variables
 let sites = []; // Each site: { id, identifier, baseUrl, sitemapPath, type, name, sitemapTree }
 let selectedSiteIndex = 0;
+let lastUpdateTimestamp = null;
+
 // *** ADDED: Global object to preserve the open/closed state of each accordion section
 let accordionState = {};
 
@@ -29,32 +31,46 @@ function generateUUID() {
 function renderCacheTrigger() {
   const menu = document.getElementById("menu");
   if (!menu) return;
-  // Remove any existing trigger
-  const existingTrigger = document.getElementById("cacheTrigger");
-  if (existingTrigger) {
-    existingTrigger.remove();
+  // Remove any existing trigger container (button + timestamp)
+  const existingContainer = document.getElementById("cacheTriggerContainer");
+  if (existingContainer) {
+    existingContainer.remove();
   }
-  // If caching is already in progress, do not display the trigger.
   if (cachingInProgress) return;
+  
+  // Create a container for the button and the timestamp
+  const container = document.createElement("div");
+  container.id = "cacheTriggerContainer";
+  container.style.display = "flex";
+  container.style.alignItems = "center";
+  container.style.gap = "0.5rem";
   
   // Create the trigger element.
   const trigger = document.createElement("span");
   trigger.id = "cacheTrigger";
-  trigger.textContent = "▶️"; // Construction emoji
-  // Style it as big and clickable.
+  trigger.textContent = "▶️";
   trigger.style.fontSize = "2rem";
   trigger.style.cursor = "pointer";
-  trigger.style.display = "block";
-  trigger.style.marginBottom = "0.5rem";
   trigger.title = "Click to cache all documents offline";
-  // When clicked, start offline caching if not already running.
   trigger.addEventListener("click", () => {
     if (!cachingInProgress) {
-      cacheAllDocuments();
+      updateDataViaProxy();
     }
   });
-  // Insert the trigger at the top of the sidebar.
-  menu.insertBefore(trigger, menu.firstChild);
+  
+  container.appendChild(trigger);
+  
+  // If a last update timestamp exists, show it
+  if (lastUpdateTimestamp) {
+    const timestampSpan = document.createElement("span");
+    timestampSpan.id = "lastUpdateTimestamp";
+    timestampSpan.textContent = `Last update: ${lastUpdateTimestamp}`;
+    timestampSpan.style.fontSize = "0.9rem";
+    container.appendChild(timestampSpan);
+  }
+  
+  // Insert the container at the top of the sidebar.
+  menu.insertBefore(container, menu.firstChild);
 }
 
 
@@ -142,13 +158,7 @@ function updateHeaderTitle() {
   }
 }
 
-// *** ADDED: Display cache update information.
-function displayCacheInfo(doc) {
-  const info = document.getElementById("cacheInfo");
-  if (info && doc && doc.updateDate) {
-    info.textContent = "Last updated: " + new Date(doc.updateDate).toLocaleString();
-  }
-}
+
 
 
 /**
@@ -254,8 +264,11 @@ function loadDefaultSitesFromJSON() {
       return response.json();
     })
     .then(data => {
-      // Assume data.defaultSites is an array of site objects.
-      const sitesArray = data.defaultSites;
+      // Mark each site as default
+      const sitesArray = data.defaultSites.map(site => {
+        site.isDefault = true;
+        return site;
+      });
       const now = new Date().toISOString();
       const promises = sitesArray.map(site => loadSiteData(site));
       return Promise.all(promises);
@@ -266,6 +279,7 @@ function loadDefaultSitesFromJSON() {
       updateSiteSwitcherPopup();
       updateHeaderTitle();
       updateSidebarFromSitemap();
+      // any additional logic you want to run after loading sites
     })
     .catch(err => {
       console.error("Error loading default sites:", err);
@@ -281,41 +295,44 @@ function loadDefaultSitesFromJSON() {
  * @returns {Promise<Object>}
  */
 function buildSiteSitemap(site) {
+  // Remove trailing slashes from the base URL
+  const cleanBaseUrl = site.baseUrl.replace(/\/+$/, "");
+  
   let sitemapUrls = [];
   let typesMapping = {}; // Map each sitemap URL to its type
   switch (site.type) {
     case "ghost":
       sitemapUrls = [
-        site.baseUrl + "/sitemap-pages.xml",
-        site.baseUrl + "/sitemap-posts.xml",
-        site.baseUrl + "/sitemap-authors.xml",
-        site.baseUrl + "/sitemap-tags.xml"
+        cleanBaseUrl + "/sitemap-pages.xml",
+        cleanBaseUrl + "/sitemap-posts.xml",
+        cleanBaseUrl + "/sitemap-authors.xml",
+        cleanBaseUrl + "/sitemap-tags.xml"
       ];
-      typesMapping[site.baseUrl + "/sitemap-pages.xml"] = "pages";
-      typesMapping[site.baseUrl + "/sitemap-posts.xml"] = "posts";
-      typesMapping[site.baseUrl + "/sitemap-authors.xml"] = "authors";
-      typesMapping[site.baseUrl + "/sitemap-tags.xml"] = "tags";
+      typesMapping[cleanBaseUrl + "/sitemap-pages.xml"] = "pages";
+      typesMapping[cleanBaseUrl + "/sitemap-posts.xml"] = "posts";
+      typesMapping[cleanBaseUrl + "/sitemap-authors.xml"] = "authors";
+      typesMapping[cleanBaseUrl + "/sitemap-tags.xml"] = "tags";
       break;
     case "wordpress":
       sitemapUrls = [
-        site.baseUrl + "/wp-sitemap-posts-post-1.xml",
-        site.baseUrl + "/wp-sitemap-posts-page-1.xml",
-        site.baseUrl + "/wp-sitemap-taxonomies-category-1.xml",
-        site.baseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml",
-        site.baseUrl + "/wp-sitemap-users-1.xml"
+        cleanBaseUrl + "/wp-sitemap-posts-post-1.xml",
+        cleanBaseUrl + "/wp-sitemap-posts-page-1.xml",
+        cleanBaseUrl + "/wp-sitemap-taxonomies-category-1.xml",
+        cleanBaseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml",
+       // cleanBaseUrl + "/wp-sitemap-users-1.xml" // not safe
       ];
-      typesMapping[site.baseUrl + "/wp-sitemap-posts-post-1.xml"] = "posts";
-      typesMapping[site.baseUrl + "/wp-sitemap-posts-page-1.xml"] = "pages";
-      typesMapping[site.baseUrl + "/wp-sitemap-taxonomies-category-1.xml"] = "categories";
-      typesMapping[site.baseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml"] = "post_tags";
-      typesMapping[site.baseUrl + "/wp-sitemap-users-1.xml"] = "users";
-      break;
+      typesMapping[cleanBaseUrl + "/wp-sitemap-posts-post-1.xml"] = "posts";
+      typesMapping[cleanBaseUrl + "/wp-sitemap-posts-page-1.xml"] = "pages";
+      typesMapping[cleanBaseUrl + "/wp-sitemap-taxonomies-category-1.xml"] = "categories";
+      typesMapping[cleanBaseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml"] = "post_tags";
+//      typesMapping[cleanBaseUrl + "/wp-sitemap-users-1.xml"] = "users"; // not safe
+      break; 
     default:
       return Promise.reject(new Error("Unknown site type: " + site.type));
   }
-  // For each sitemap URL, fetch and parse it
+  // For each sitemap URL, fetch and parse it via the proxy.
   const sitemapPromises = sitemapUrls.map(url => {
-    return parseSitemap(url, site.baseUrl).then(urlsArray => {
+    return parseSitemap(url, cleanBaseUrl).then(urlsArray => {
       return { type: typesMapping[url], urls: urlsArray };
     });
   });
@@ -328,6 +345,7 @@ function buildSiteSitemap(site) {
   });
 }
 
+
 /**
  * Fetch and parse a sitemap XML from a given URL.
  * Returns an array of objects: { url, creationDate }.
@@ -336,36 +354,47 @@ function buildSiteSitemap(site) {
  * @returns {Promise<Array>}
  */
 function parseSitemap(sitemapUrl, baseUrl) {
-  return fetch(sitemapUrl)
-    .then(response => {
-      if (!response.ok) throw new Error("Network error fetching sitemap: " + sitemapUrl);
-      return response.text();
-    })
-    .then(xmlString => {
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(xmlString, "application/xml");
-      if (xmlDoc.getElementsByTagName("parsererror").length)
-        throw new Error("Error parsing XML from " + sitemapUrl);
-      const urlElements = xmlDoc.getElementsByTagName("url");
-      const urlsArray = [];
-      for (let i = 0; i < urlElements.length; i++) {
-        const locEl = urlElements[i].getElementsByTagName("loc")[0];
-        const lastmodEl = urlElements[i].getElementsByTagName("lastmod")[0];
-        const loc = locEl ? locEl.textContent.trim() : null;
-        const lastmod = lastmodEl ? lastmodEl.textContent.trim() : null;
-        if (loc && loc.startsWith(baseUrl)) {
-          urlsArray.push({ url: loc, creationDate: lastmod });
-        }
+ // Send the request to the proxy instead of directly to the sitemap URL.
+ return fetch("https://mpantsaka.kahiether.com/proxy", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    url: sitemapUrl,
+    action: "FETCH_SITEMAP" // You can adjust this if your proxy expects a different action.
+  })
+})
+  .then(response => {
+    if (!response.ok) {
+      throw new Error("Proxy error fetching sitemap: " + sitemapUrl);
+    }
+    // Assuming the proxy returns the raw XML as text.
+    return response.text();
+  })
+  .then(xmlString => {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlString, "application/xml");
+    if (xmlDoc.getElementsByTagName("parsererror").length) {
+      throw new Error("Error parsing XML from " + sitemapUrl);
+    }
+    const urlElements = xmlDoc.getElementsByTagName("url");
+    const urlsArray = [];
+    for (let i = 0; i < urlElements.length; i++) {
+      const locEl = urlElements[i].getElementsByTagName("loc")[0];
+      const lastmodEl = urlElements[i].getElementsByTagName("lastmod")[0];
+      const loc = locEl ? locEl.textContent.trim() : null;
+      const lastmod = lastmodEl ? lastmodEl.textContent.trim() : null;
+      if (loc && loc.startsWith(baseUrl)) {
+        urlsArray.push({ url: loc, creationDate: lastmod });
       }
-      return urlsArray;
-    })
-    .catch(error => {
-      console.error("Error in parseSitemap for " + sitemapUrl, error);
-      // Optionally, return cached sitemap data here if you have it
-      return [];
-    });
+    }
+    return urlsArray;
+  })
+  .catch(error => {
+    console.error("Error in parseSitemap for " + sitemapUrl, error);
+    // Optionally, return an empty array if there was an error.
+    return [];
+  });
 }
-
 /* ------------------- Accordion Sidebar Functions ------------------- */
 
 /**
@@ -559,74 +588,24 @@ function loadPostContent(url, forceFetch = false) {
       .then(doc => {
         if (doc && doc.content) {
           console.log("Loaded document from IndexedDB:", url);
+          // Mark this document as successfully loaded
+          documentCacheStatus[url] = "success";
+          updateSidebarFromSitemap();
           contentArea.innerHTML = `<h2>${doc.title}</h2>${doc.content}`;
         } else {
-          fetchAndCache(url);
+          cacheDocument(url);
         }
       })
       .catch(err => {
         console.error("Error retrieving document from cache:", err);
-        fetchAndCache(url);
+        cacheDocument(url);
       });
   } else {
     // Force a network fetch.
-    fetchAndCache(url);
+    cacheDocument(url);
   }
 }
 
-
-
-/**
- * Fetch the document from the network, process it, sanitize it,
- * store it in IndexedDB (as a Document), and display it.
- * @param {string} url - The URL of the document.
- */
-function fetchAndCache(url) {
-  fetch(url, { mode: 'cors', credentials: 'include' })
-    .then(response => {
-      if (!response.ok) throw new Error("Network error");
-      return response.text();
-    })
-    .then(html => {
-      const baseUrl = sites[selectedSiteIndex].baseUrl;
-      const processedHTML = processHTML(html, baseUrl);
-      const sanitizedHTML = sanitizeContent(processedHTML);
-      
-      const titleMatch = processedHTML.match(/<title>(.*?)<\/title>/i);
-      const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : url;
-      
-      let path = "";
-      let depth = 0;
-      try {
-        const urlObj = new URL(url);
-        path = urlObj.pathname;
-        depth = path.split('/').filter(Boolean).length;
-      } catch (e) {
-        console.error("Error parsing URL for document", url, e);
-      }
-      
-      // Create a document object with a UUID.
-      const docObj = {
-        uuid: generateUUID(), // new unique id for the document
-        originalUrl: url,
-        content: sanitizedHTML,
-        title: title,
-        path: path,
-        depth: depth,
-        createDate: new Date().toISOString(),
-        updateDate: new Date().toISOString()
-      };
-      
-      storeDocument(docObj)
-        .catch(err => console.error("Error storing document:", err));
-      
-      document.getElementById("content").innerHTML = `<h2>${title}</h2>${sanitizedHTML}`;
-    })
-    .catch(err => {
-      console.error("Error fetching content:", err);
-      document.getElementById("content").innerHTML = "<p>Error loading content.</p>";
-    });
-}
 
 
 /* ------------------- Site Switcher Popup Functions ------------------- */
@@ -806,9 +785,15 @@ function cacheDocument(url) {
   documentCacheStatus[url] = "loading";
   updateSidebarFromSitemap(); // update status in sidebar
 
-  return fetch(url, { mode: 'cors', credentials: 'include' })
+  return fetch("https://mpantsaka.kahiether.com/proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: url, action: "FETCH_DOCUMENT" })
+  })
     .then(response => {
-      if (!response.ok) throw new Error("Network error");
+      if (!response.ok) {
+        throw new Error("Proxy error fetching document: " + url);
+      }
       return response.text();
     })
     .then(html => {
@@ -816,11 +801,9 @@ function cacheDocument(url) {
       const processedHTML = processHTML(html, baseUrl);
       const sanitizedHTML = sanitizeContent(processedHTML);
       
-      // Extract title from processed HTML
       const titleMatch = processedHTML.match(/<title>(.*?)<\/title>/i);
       const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : url;
       
-      // Determine path and depth from the URL.
       let path = "";
       let depth = 0;
       try {
@@ -831,9 +814,9 @@ function cacheDocument(url) {
         console.error("Error parsing URL for document", url, e);
       }
       
-      // Create a complete document object with a uuid.
+      // Create a document object with a UUID.
       const docObj = {
-        uuid: generateUUID(), // Ensure generateUUID() is defined
+        uuid: generateUUID(),
         originalUrl: url,
         content: sanitizedHTML,
         title: title,
@@ -842,8 +825,7 @@ function cacheDocument(url) {
         createDate: new Date().toISOString(),
         updateDate: new Date().toISOString()
       };
-
-      // Now store the document object.
+      
       return storeDocument(docObj);
     })
     .then(() => {
@@ -856,7 +838,6 @@ function cacheDocument(url) {
       updateSidebarFromSitemap();
     });
 }
-
 
 /**
  * Cache all documents from the current site's sitemap tree.
@@ -946,32 +927,24 @@ function sanitizeContent(html) {
   return doc.body.innerHTML;
 }
 
+/**
+ * Load Site Data
+ */
+
 function loadSiteData(site) {
   return getSite(site.id).then(cachedSite => {
     if (cachedSite && cachedSite.sitemapTree) {
       console.log("Loaded site from cache:", site.id);
       site.sitemapTree = cachedSite.sitemapTree;
+      // Instead of pre-caching everything, just return the cached site.
       return site;
     } else {
-      return buildSiteSitemap(site).then(sitemapTree => {
-        site.sitemapTree = sitemapTree;
-        const now = new Date().toISOString();
-        const siteObj = {
-          uuid: site.id, // or generate a new UUID if needed
-          baseUrl: site.baseUrl,
-          createDate: now,
-          updateDate: now,
-          sitemapTree: sitemapTree
-        };
-        storeSite(siteObj);
-          // Also store folders from this sitemap
-        storeFoldersFromSitemap(site);
-        return site;
-      });
+      // If there's no cached sitemap, update only if online.
+      return navigator.onLine ? fetchSiteDataViaProxy(site) : site;
     }
   }).catch(err => {
     console.error("Error loading site data for", site.id, err);
-    // Fallback: build from network if IndexedDB lookup fails
+    // Fallback using local logic
     return buildSiteSitemap(site).then(sitemapTree => {
       site.sitemapTree = sitemapTree;
       const now = new Date().toISOString();
@@ -980,13 +953,19 @@ function loadSiteData(site) {
         baseUrl: site.baseUrl,
         createDate: now,
         updateDate: now,
-        sitemapTree: sitemapTree
+        sitemapTree: sitemapTree,
+        isDefault: site.isDefault || false
       };
       storeSite(siteObj);
+      storeFoldersFromSitemap(site);
       return site;
     });
   });
 }
+
+
+
+
 
 
 /**
@@ -1091,18 +1070,29 @@ function getFoldersBySite(siteId) {
 // *** ADDED: Function to filter sidebar items without re-rendering the entire list.
 function filterSidebarItems() {
   const filterInput = document.getElementById("menuFilter");
-  const filterText = filterInput ? filterInput.value.toLowerCase() : "";
+  const filterText = filterInput ? filterInput.value : "";
   // Assume all our sidebar items are inside the #menu element (except the filter input)
   const items = document.querySelectorAll("#menu ul li");
+  let regex;
+  try {
+    // Create a regular expression from the filter text (case-insensitive)
+    regex = new RegExp(filterText, "i");
+  } catch (e) {
+    // If invalid, leave regex undefined and use simple substring matching.
+    regex = null;
+  }
   items.forEach(function(li) {
-    // If the li's text contains the filter text, show it; otherwise hide it.
-    if (li.textContent.toLowerCase().includes(filterText)) {
-      li.style.display = "";
+    const text = li.textContent;
+    let show = false;
+    if (regex) {
+      show = regex.test(text);
     } else {
-      li.style.display = "none";
+      show = text.toLowerCase().includes(filterText.toLowerCase());
     }
+    li.style.display = show ? "" : "none";
   });
 }
+
 
 
 // *** ADDED: Function to force an update from the server.
@@ -1125,3 +1115,82 @@ function forceUpdateVersion() {
     });
 }
 
+
+//** Proxy function
+
+function updateDataViaProxy() {
+  if (!navigator.onLine) {
+    console.log("Offline: Skipping updateDataViaProxy");
+    return Promise.resolve(); // or simply return if you don't need a promise
+  }
+
+  cachingInProgress = true;
+  renderCacheTrigger(); // Hide the trigger while updating.
+
+  const currentSite = sites[selectedSiteIndex];
+  
+  // Use the buildSiteSitemap function to update the sitemapTree.
+  buildSiteSitemap(currentSite)
+    .then(sitemapTree => {
+      console.log("Proxy update complete via buildSiteSitemap:", sitemapTree);
+      currentSite.sitemapTree = sitemapTree;
+      // Update last update timestamp
+      lastUpdateTimestamp = new Date().toLocaleString();
+      storeSite({
+        uuid: currentSite.id,
+        baseUrl: currentSite.baseUrl,
+        createDate: new Date().toISOString(),
+        updateDate: new Date().toISOString(),
+        sitemapTree: sitemapTree,
+        isDefault: currentSite.isDefault || false
+      });
+      storeFoldersFromSitemap(currentSite);
+      cacheAllDocuments();
+    })
+    .catch(error => {
+      console.error("Proxy update error:", error);
+    })
+    .finally(() => {
+      cachingInProgress = false;
+      renderCacheTrigger();
+    });
+}
+
+
+
+//** Proxy function
+function fetchSiteDataViaProxy(site) {
+  if (!navigator.onLine) {
+    console.log("Offline: Using cached site data for", site.baseUrl);
+    return Promise.resolve(site);
+  }
+  
+  cachingInProgress = true;
+  renderCacheTrigger(); // Hides the ▶️ button
+
+  // Instead of calling the proxy directly expecting JSON,
+  // use the sitemap builder that calls parseSitemap() via the proxy.
+  return buildSiteSitemap(site)
+    .then(sitemapTree => {
+      site.sitemapTree = sitemapTree;
+      // Store the site along with the isDefault flag.
+      storeSite({
+        uuid: site.id,
+        baseUrl: site.baseUrl,
+        createDate: new Date().toISOString(),
+        updateDate: new Date().toISOString(),
+        sitemapTree: sitemapTree,
+        isDefault: site.isDefault || false
+      });
+      storeFoldersFromSitemap(site);
+      return site;
+    })
+    .catch(err => {
+      console.error("Error fetching site data via proxy:", err);
+      throw err;
+    })
+    .finally(() => {
+      cachingInProgress = false;
+      renderCacheTrigger();
+    });
+}

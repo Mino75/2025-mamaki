@@ -1,5 +1,5 @@
 // Define the cache name and the list of URLs to cache
-const CACHE_VERSION = 'v1.0.0'; // Use a fixed version for testing
+const CACHE_VERSION = 'v1.0.1'; // Use a fixed version for testing
 //const CACHE_NAME = `mamaki-cache-${CACHE_VERSION}`; // Use a fixed version for testing
 //const CACHE_VERSION = new Date().toISOString(); // e.g., "2025-02-03T00:00:00.000Z"
 const CACHE_NAME = `mamaki-cache-${CACHE_VERSION}`;
@@ -51,24 +51,31 @@ self.addEventListener('activate', event => {
 
 // Fetch event: Serve cached content when available, fall back to network if not
 self.addEventListener('fetch', event => {
-  event.respondWith(
-    caches.match(event.request).then(response => {
-      // If found in cache, return it.
-      if (response) {
-        return response;
-      }
-      // Otherwise, attempt a network fetch. If that fails, return a fallback response.
-      return fetch(event.request).catch(error => {
-        // You can return a custom offline page if you cache one,
-        // or simply a plain text response as shown here.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match('/index.html').then(response => {
+        return response || fetch(event.request);
+      }).catch(() => {
         return new Response("You are offline. Please check your connection.", {
           status: 503,
           statusText: "Offline",
           headers: new Headers({ 'Content-Type': 'text/plain' })
         });
-      });
-    })
-  );
+      })
+    );
+  } else {
+    event.respondWith(
+      caches.match(event.request).then(response => {
+        return response || fetch(event.request).catch(() => {
+          return new Response("You are offline. Please check your connection.", {
+            status: 503,
+            statusText: "Offline",
+            headers: new Headers({ 'Content-Type': 'text/plain' })
+          });
+        });
+      })
+    );
+  }
 });
 
 

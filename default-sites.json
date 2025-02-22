@@ -20,6 +20,27 @@
         "baseUrl": "https://digigasy.com",
         "sitemapPath": "/wp-sitemap.xml",
         "type": "wordpress"
+      },      
+      {
+        "id": "e5c9a04d-84af-4e8e-9f2a-6e6f8c2d3b41",
+        "identifier": "soaway",
+        "baseUrl": "https://soaway.fr/",
+        "sitemapPath": "/wp-sitemap.xml",
+        "type": "wordpress"
+      },
+      {
+        "id": "4f2b7d10-17d3-4c72-8ae4-2e5f3c1b9d60",
+        "identifier": "oyuki-art",
+        "baseUrl": "https://oyuki.art",
+        "sitemapPath": "/wp-sitemap.xml",
+        "type": "wordpress"
+      },
+      {
+        "id": "4f2b7d10-17d3-4c72-8ae4-2e5f3c1b9d60",
+        "identifier": "hongkoala",
+        "baseUrl": "https://hongkoala.com/",
+        "sitemapPath": "/wp-sitemap.xml",
+        "type": "wordpress"
       }
     ]
   }
