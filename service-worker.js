@@ -1,8 +1,7 @@
-// Define the cache name and the list of URLs to cache
-const CACHE_VERSION = 'v1.0.1'; // Use a fixed version for testing
-//const CACHE_NAME = `mamaki-cache-${CACHE_VERSION}`; // Use a fixed version for testing
-//const CACHE_VERSION = new Date().toISOString(); // e.g., "2025-02-03T00:00:00.000Z"
+// Generate a unique cache name based on the current timestamp 
+const CACHE_VERSION = new Date().toISOString(); // e.g., "2025-02-03T00:00:00.000Z"
 const CACHE_NAME = `mamaki-cache-${CACHE_VERSION}`;
+
 const urlsToCache = [
   '/',
   '/index.html',
@@ -19,17 +18,17 @@ const urlsToCache = [
 // Install event: Cache essential assets
 self.addEventListener('install', event => {
   console.log('[Service Worker] Installing and caching static assets');
+  // Force the waiting service worker to become active immediately.
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
         return cache.addAll(urlsToCache);
       })
   );
-  // Force the waiting service worker to become active
-  self.skipWaiting();
 });
 
-// Activate event: Clean up old caches
+// Activate event: Clean up old caches and notify clients to reload.
 self.addEventListener('activate', event => {
   console.log('[Service Worker] Activating Service Worker');
   event.waitUntil(
@@ -44,12 +43,22 @@ self.addEventListener('activate', event => {
         })
       );
     })
+    .then(() => {
+      // Claim clients immediately so that the new service worker takes effect.
+      return self.clients.claim();
+    })
+    .then(() => {
+      // Notify all clients to reload with the new version.
+      return self.clients.matchAll().then(clients => {
+        clients.forEach(client => {
+          client.postMessage({ action: 'reload' });
+        });
+      });
+    })
   );
-  // Claim clients immediately so that the new service worker takes effect
-  self.clients.claim();
 });
 
-// Fetch event: Serve cached content when available, fall back to network if not
+// Fetch event: Serve cached content when available, fall back to network if not.
 self.addEventListener('fetch', event => {
   if (event.request.mode === 'navigate') {
     event.respondWith(
@@ -77,5 +86,3 @@ self.addEventListener('fetch', event => {
     );
   }
 });
-
-
