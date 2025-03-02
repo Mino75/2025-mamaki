@@ -161,3 +161,27 @@ function generateUUID() {
     return v.toString(16);
   });
 }
+
+
+function clearDatabase(dbName) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(dbName);
+    request.onsuccess = () => {
+      console.log(`Database "${dbName}" deleted successfully.`);
+      resolve();
+    };
+    request.onerror = event => {
+      console.error(`Error deleting database "${dbName}":`, event.target.error);
+      reject(event.target.error);
+    };
+    request.onblocked = () => {
+      console.warn(`Deletion of database "${dbName}" is blocked. Please close other tabs.`);
+    };
+  });
+}
+
+function clearCaches() {
+  return caches.keys().then(cacheNames => {
+    return Promise.all(cacheNames.map(name => caches.delete(name)));
+  });
+}

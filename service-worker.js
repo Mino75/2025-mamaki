@@ -75,3 +75,10 @@ self.addEventListener('fetch', event => {
     })
   );
 });
+
+
+function clearCaches() {
+  return caches.keys().then(cacheNames => {
+    return Promise.all(cacheNames.map(name => caches.delete(name)));
+  });
+}

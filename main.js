@@ -653,6 +653,24 @@ function setupBurgerMenu() {
   document.addEventListener("DOMContentLoaded", () => {
     loadDefaultSitesFromJSON();
     setupBurgerMenu();
+
+    const updateBtn = document.getElementById("updateVersion");
+  if (updateBtn) {
+    updateBtn.addEventListener("click", () => {
+      Promise.all([
+        clearDatabase("OfflineDocumentsDB"), // Replace with your actual database name
+        clearCaches()
+      ])
+      .then(() => {
+        console.log("Database and caches cleared.");
+        window.location.reload();
+      })
+      .catch(err => {
+        console.error("Error clearing storage:", err);
+      });
+    });
+  }
+
   });
 
   // Expose some functions if needed.
