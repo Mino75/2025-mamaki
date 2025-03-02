@@ -218,11 +218,22 @@
     /* Always display the burger menu on all devices */
     #burger-menu,
     #burgerButton {
-      display: block !important;
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 1000;
+  display: flex !important;
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+  width: 50px;
+  height: 50px;
+  border: 2px solid var(--primary-blue);
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  line-height: 50px;
+  transition: transform 0.2s;
+  background-color: transparent;
+  color: var(--primary-blue);
     }
   `;
 

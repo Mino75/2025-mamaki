@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Mamaki Content Manager</title>
+  <title>Mamaki Offline Content Reader</title>
   <link rel="manifest" href="manifest.json" />
-  <!-- Instead of linking a CSS file, we load our style JS -->
-  <script src="style.js"></script>
-  <script src="db.js"></script>
+
+
+  
   <!-- Set the theme color (dark mode by default) -->
   <meta name="theme-color" content="#121212" />
 </head>
 <body class="dark">
   <!-- Header with title and dark/light mode toggle -->
   <header>
-    <h1 id="headerTitle">Mamaki Content Manager</h1>
+    <h1 id="headerTitle">Mamaki Offline Content Reader</h1>
     <div>
       <span id="toggleMode" style="font-size: 2rem; cursor: pointer;">☀️</span>
       <button id="updateVersion">Update Version</button>
@@ -35,7 +35,10 @@
       <p>Select a post from the left menu to view its content.</p>
     </main>
   </div>
-
+    <!-- Instead of linking a CSS file, we load our style JS -->
+    <script src="style.js"></script>
+  <script src="db.js"></script>
+  <script src="theme.js"></script>
   <!-- Include main.js for functionality -->
   <script src="main.js"></script>
   <!-- Service Worker registration remains the same -->

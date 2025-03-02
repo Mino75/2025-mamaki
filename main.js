@@ -1,1088 +1,663 @@
-/*************** MAIN.JS ******************/
-
-// Service Worker registration & update messaging
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/service-worker.js').then(registration => {
-    console.log('Service Worker Registered');
-    
-    // Listen for messages from the service worker to trigger reload (if needed)
-    navigator.serviceWorker.addEventListener('message', event => {
-      if (event.data.action === 'reload') {
-        console.log('New version available. Reloading page.');
-        window.location.reload();
-      }
+(function() {
+  // ---------------------- Service Worker Registration ----------------------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').then(registration => {
+      console.log('Service Worker Registered');
+      navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data.action === 'reload') {
+          console.log('New version available. Reloading page.');
+          window.location.reload();
+        }
+      });
     });
-  });
-}
-
-// Global variables
-let sites = []; // Each site: { id, identifier, baseUrl, sitemapPath, type, name, sitemapTree }
-let selectedSiteIndex = 0;
-let lastUpdateTimestamp = null;
-
-// Global object to preserve the open/closed state of each accordion section
-let accordionState = {};
-
-// Global flag to track if caching is in progress.
-let cachingInProgress = false;
-
-// Global object to track caching status for each URL.
-// Possible statuses: "loading", "success", "failed"
-let documentCacheStatus = {};
-
-// Generate UUID
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0,
-          v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
-
-/**
- * Render the offline caching trigger button (▶️) at the top of the sidebar.
- * It is shown only when caching is not in progress.
- */
-function renderCacheTrigger() {
-  const menu = document.getElementById("menu");
-  if (!menu) return;
-  // Remove any existing trigger container
-  const existingContainer = document.getElementById("cacheTriggerContainer");
-  if (existingContainer) {
-    existingContainer.remove();
   }
-  if (cachingInProgress) return;
+
+  // ---------------------- Global Variables ----------------------
+  let sites = []; // Array of site objects loaded from default-sites.json.
+  let selectedSiteIndex = 0;
+  let lastUpdateTimestamp = null;
+  let accordionState = {}; // e.g. { pages: true, posts: false, ... }
+  let cachingInProgress = false;
+
+  // ---------------------- Utility Functions ----------------------
+  function debounce(func, wait) {
+    let timeout;
+    return function() {
+      clearTimeout(timeout);
+      timeout = setTimeout(func, wait);
+    };
+  }
+
+  function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0,
+            v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  function removeHyperlinks(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    // Find all anchor tags
+    const anchors = doc.querySelectorAll("a");
+    anchors.forEach(anchor => {
+      // Replace the <a> element with a text node containing its text content.
+      const text = document.createTextNode(anchor.textContent);
+      anchor.parentNode.replaceChild(text, anchor);
+    });
+    return doc.documentElement.outerHTML;
+  }
   
-  // Create a container for the button and timestamp
-  const container = document.createElement("div");
-  container.id = "cacheTriggerContainer";
-  container.style.display = "flex";
-  container.style.alignItems = "center";
-  container.style.gap = "0.5rem";
-  
-  // Create the trigger element (▶️)
-  const trigger = document.createElement("span");
-  trigger.id = "cacheTrigger";
-  trigger.textContent = "▶️";
-  trigger.style.fontSize = "2rem";
-  trigger.style.cursor = "pointer";
-  trigger.title = "Click to cache all documents offline";
-  trigger.addEventListener("click", () => {
-    if (!cachingInProgress) {
-      updateDataViaProxy();
+
+  // ---------------------- UI Update Functions ----------------------
+  function updateHeaderTitle() {
+    const header = document.getElementById("headerTitle");
+    if (header && sites[selectedSiteIndex]) {
+      let baseUrl = sites[selectedSiteIndex].baseUrl;
+      baseUrl = baseUrl.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\.[^.]+$/, "");
+      header.textContent = "Mamaki Content Manager - " + baseUrl;
     }
-  });
-  
-  container.appendChild(trigger);
-  
-  // If a last update timestamp exists, show it
-  if (lastUpdateTimestamp) {
-    const timestampSpan = document.createElement("span");
-    timestampSpan.id = "lastUpdateTimestamp";
-    timestampSpan.textContent = `Last update: ${lastUpdateTimestamp}`;
-    timestampSpan.style.fontSize = "0.9rem";
-    container.appendChild(timestampSpan);
-  }
-  
-  // Insert the container at the top of the sidebar.
-  menu.insertBefore(container, menu.firstChild);
-}
-
-// When DOM is ready, load default sites and initialize UI
-document.addEventListener("DOMContentLoaded", () => {
-  // 1. Apply saved theme preference from localStorage.
-  const storedTheme = localStorage.getItem("theme");
-  const body = document.body;
-  const toggleElem = document.getElementById("toggleMode");
-  
-  if (storedTheme) {
-    body.classList.remove("dark", "light");
-    body.classList.add(storedTheme);
-    toggleElem.textContent = storedTheme === "dark" ? "⚪" : "🌑";
-  } else {
-    body.classList.add("dark");
-    toggleElem.textContent = "⚪";
-    localStorage.setItem("theme", "dark");
   }
 
-  // 2. Load default sites. (This will use cached IndexedDB data if available.)
-  loadDefaultSitesFromJSON();
-
-  // 3. Set up dark/light mode toggle event listener.
-  if (toggleElem) {
-    toggleElem.addEventListener("click", toggleMode);
-  }
-
-  // 4. Set up filter input for sidebar (if present).
-  const filterInput = document.getElementById("menuFilter");
-  if (filterInput) {
-    filterInput.addEventListener("input", debounce(filterSidebarItems, 200));
-  }
-
-  // 5. Set up the burger menu for site management.
-  setupBurgerMenu();
-});
-
-// 6. Attach an Event Listener for the Update Button (if present).
-const updateVersionButton = document.getElementById("updateVersion");
-if (updateVersionButton) {
-  updateVersionButton.addEventListener("click", forceUpdateVersion);
-}
-
-/* ------------------- Basic UI Functions ------------------- */
-
-function getCurrentSitePosts() {
-  if (sites[selectedSiteIndex] && sites[selectedSiteIndex].sitemapTree) {
-    return sites[selectedSiteIndex].sitemapTree.posts || [];
-  }
-  return [];
-}
-
-// Debounce utility to limit function calls.
-function debounce(func, wait) {
-  let timeout;
-  return function () {
-    clearTimeout(timeout);
-    timeout = setTimeout(func, wait);
-  };
-}
-
-// Update header title with the current site name.
-function updateHeaderTitle() {
-  const header = document.getElementById("headerTitle");
-  if (header && sites[selectedSiteIndex]) {
-    let baseUrl = sites[selectedSiteIndex].baseUrl;
-    baseUrl = baseUrl.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\.[^.]+$/, "");
-    header.textContent = "Mamaki Content Manager - " + baseUrl;
-  }
-}
-
-/**
- * Process HTML: remove absolute URLs, replace src with data-src, etc.
- */
-function processHTML(html, baseUrl) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, "text/html");
-
-  // Process <img> elements.
-  doc.querySelectorAll("img").forEach(img => {
-    if (img.hasAttribute("src")) {
-      try {
-        const urlObj = new URL(img.getAttribute("src"), baseUrl);
-        img.setAttribute("data-src", urlObj.pathname);
-      } catch (e) {}
-      img.removeAttribute("src");
-    }
-  });
-
-  // Process elements with "srcset".
-  doc.querySelectorAll("[srcset]").forEach(elem => {
-    const srcsetVal = elem.getAttribute("srcset");
-    if (srcsetVal) {
-      const escapedBase = baseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const re = new RegExp(escapedBase, 'g');
-      const newSrcset = srcsetVal.replace(re, "");
-      elem.setAttribute("data-srcset", newSrcset);
-      elem.removeAttribute("srcset");
-    }
-  });
-
-  // Process <video> and <audio> elements and their <source> children.
-  ["video", "audio"].forEach(tag => {
-    doc.querySelectorAll(tag).forEach(media => {
-      if (media.hasAttribute("src")) {
+  // ---------------------- HTML Processing ----------------------
+  function processHTML(html, baseUrl) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    doc.querySelectorAll("img").forEach(img => {
+      if (img.hasAttribute("src")) {
         try {
-          const urlObj = new URL(media.getAttribute("src"), baseUrl);
-          media.setAttribute("data-src", urlObj.pathname);
-        } catch (e) {}
-        media.removeAttribute("src");
+          const urlObj = new URL(img.getAttribute("src"), baseUrl);
+          img.setAttribute("data-src", urlObj.pathname);
+        } catch (e) { }
+        img.removeAttribute("src");
       }
-      media.querySelectorAll("source").forEach(source => {
-        if (source.hasAttribute("src")) {
-          try {
-            const urlObj = new URL(source.getAttribute("src"), baseUrl);
-            source.setAttribute("data-src", urlObj.pathname);
-          } catch (e) {}
-          source.removeAttribute("src");
-        }
-      });
     });
-  });
-
-  // Process inline styles with background-image URLs.
-  doc.querySelectorAll("[style]").forEach(elem => {
-    const style = elem.getAttribute("style");
-    const bgMatch = style.match(/background-image\s*:\s*url\((['"]?)(.*?)\1\)/i);
-    if (bgMatch) {
-      try {
-        const urlObj = new URL(bgMatch[2], baseUrl);
-        elem.setAttribute("data-bg", urlObj.pathname);
-      } catch (e) {}
-      const newStyle = style.replace(/background-image\s*:\s*url\((['"]?)(.*?)\1\);?/i, "");
-      elem.setAttribute("style", newStyle);
-    }
-  });
-
-  // Process <a> elements to convert absolute URLs to relative.
-  doc.querySelectorAll("a").forEach(link => {
-    if (link.hasAttribute("href")) {
-      try {
-        const urlObj = new URL(link.getAttribute("href"), baseUrl);
-        if (urlObj.origin === new URL(baseUrl).origin) {
-          link.setAttribute("href", urlObj.pathname);
-        }
-      } catch (e) {}
-    }
-  });
-
-  return doc.documentElement.outerHTML;
-}
-
-/* ------------------- Default Sites and Sitemap Building ------------------- */
-
-// Load default sites from JSON. This function does NOT clear IndexedDB.
-// It uses cached site data (if available) via loadSiteData.
-function loadDefaultSitesFromJSON() {
-  fetch('default-sites.json')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to load default sites.');
-      return response.json();
-    })
-    .then(data => {
-      // Mark each site as default.
-      const sitesArray = data.defaultSites.map(site => {
-        site.isDefault = true;
-        return site;
-      });
-      const promises = sitesArray.map(site => loadSiteData(site));
-      return Promise.all(promises);
-    })
-    .then(results => {
-      sites = results;
-      selectedSiteIndex = 0;
-      updateSiteSwitcherPopup();
-      updateHeaderTitle();
-      updateSidebarFromSitemap();
-  // Delay a bit to ensure IndexedDB is ready, then recheck the document statuses.
-  setTimeout(() => {
-    recheckCachedDocuments();
-  }, 500);
-    })
-    .catch(err => {
-      console.error("Error loading default sites:", err);
-    });
-}
-
-/**
- * Load site data by checking IndexedDB first.
- * If cached data exists (and includes a sitemapTree), use it;
- * otherwise, fetch fresh data via the proxy.
- */
-function loadSiteData(site) {
-  return getSite(site.id).then(cachedSite => {
-    if (cachedSite && cachedSite.sitemapTree) {
-      console.log("Loaded site from cache:", site.id);
-      site.sitemapTree = cachedSite.sitemapTree;
-      return site;
-    } else {
-      return navigator.onLine ? fetchSiteDataViaProxy(site) : site;
-    }
-  }).catch(err => {
-    console.error("Error loading site data for", site.id, err);
-    return buildSiteSitemap(site).then(sitemapTree => {
-      site.sitemapTree = sitemapTree;
-      const now = new Date().toISOString();
-      const siteObj = {
-        uuid: site.id,
-        baseUrl: site.baseUrl,
-        createDate: now,
-        updateDate: now,
-        sitemapTree: sitemapTree,
-        isDefault: site.isDefault || false
-      };
-      storeSite(siteObj);
-      storeFoldersFromSitemap(site);
-      return site;
-    });
-  });
-}
-
-/**
- * Build a JSON sitemap tree for a given site.
- */
-function buildSiteSitemap(site) {
-  const cleanBaseUrl = site.baseUrl.replace(/\/+$/, "");
-  let sitemapUrls = [];
-  let typesMapping = {};
-  switch (site.type) {
-    case "ghost":
-      sitemapUrls = [
-        cleanBaseUrl + "/sitemap-pages.xml",
-        cleanBaseUrl + "/sitemap-posts.xml",
-        cleanBaseUrl + "/sitemap-authors.xml",
-        cleanBaseUrl + "/sitemap-tags.xml"
-      ];
-      typesMapping[cleanBaseUrl + "/sitemap-pages.xml"] = "pages";
-      typesMapping[cleanBaseUrl + "/sitemap-posts.xml"] = "posts";
-      typesMapping[cleanBaseUrl + "/sitemap-authors.xml"] = "authors";
-      typesMapping[cleanBaseUrl + "/sitemap-tags.xml"] = "tags";
-      break;
-    case "wordpress":
-      sitemapUrls = [
-        cleanBaseUrl + "/wp-sitemap-posts-post-1.xml",
-        cleanBaseUrl + "/wp-sitemap-posts-page-1.xml",
-        cleanBaseUrl + "/wp-sitemap-taxonomies-category-1.xml",
-        cleanBaseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml"
-      ];
-      typesMapping[cleanBaseUrl + "/wp-sitemap-posts-post-1.xml"] = "posts";
-      typesMapping[cleanBaseUrl + "/wp-sitemap-posts-page-1.xml"] = "pages";
-      typesMapping[cleanBaseUrl + "/wp-sitemap-taxonomies-category-1.xml"] = "categories";
-      typesMapping[cleanBaseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml"] = "post_tags";
-      break; 
-    default:
-      return Promise.reject(new Error("Unknown site type: " + site.type));
+    return doc.documentElement.outerHTML;
   }
-  const sitemapPromises = sitemapUrls.map(url => {
-    return parseSitemap(url, cleanBaseUrl).then(urlsArray => {
-      return { type: typesMapping[url], urls: urlsArray };
-    });
-  });
-  return Promise.all(sitemapPromises).then(results => {
-    const sitemapTree = {};
-    results.forEach(item => {
-      sitemapTree[item.type] = item.urls;
-    });
-    return sitemapTree;
-  });
-}
 
-/**
- * Fetch and parse a sitemap XML via proxy.
- */
-function parseSitemap(sitemapUrl, baseUrl) {
+  function sanitizeContent(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    doc.querySelectorAll("img").forEach(el => {
+      const altText = el.alt || "Image";
+      const placeholder = document.createElement("span");
+      placeholder.textContent = `[${altText}]`;
+      el.parentNode.replaceChild(placeholder, el);
+    });
+    return doc.body.innerHTML;
+  }
+
+  // ---------------------- IndexedDB Helper Functions ----------------------
+  // (Assuming openDatabase, storeSite, storeDocument, getSite are defined in db.js.)
+  // Here we define getDocumentByUrl and getDocumentsForFolder if not provided.
+  function getDocumentByUrl(url) {
+    return openDatabase().then(db => {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(["documents"], "readonly");
+        const store = tx.objectStore("documents");
+        const index = store.index("originalUrl");
+        const request = index.get(url);
+        request.onsuccess = event => resolve(event.target.result);
+        request.onerror = event => reject("Error retrieving document: " + event.target.error);
+      });
+    });
+  }
+
+  function getDocumentsForFolder(category) {
+    return openDatabase().then(db => {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(["documents"], "readonly");
+        const store = tx.objectStore("documents");
+        const docs = [];
+        const request = store.openCursor();
+        request.onsuccess = event => {
+          const cursor = event.target.result;
+          if (cursor) {
+            const doc = cursor.value;
+            // Filter by category and site id/baseUrl
+            if (doc.category === category && doc.siteId === sites[selectedSiteIndex].id) {
+              docs.push(doc);
+            }
+            cursor.continue();
+          } else {
+            resolve(docs);
+          }
+        };
+        request.onerror = event => reject("Error querying documents: " + event.target.error);
+      });
+    });
+  }
+  
+  
+
+
+  // ---------------------- Sitemap Helpers ----------------------
+  // processSitemap fetches a sitemap URL and returns an array of objects with url and category.
+// Helper function to fetch via proxy.
+function fetchViaProxy(url) {
   return fetch("https://mpantsaka.kahiether.com/proxy", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: sitemapUrl, action: "FETCH_SITEMAP" })
-  })
-    .then(response => {
-      if (!response.ok) throw new Error("Proxy error fetching sitemap: " + sitemapUrl);
-      return response.text();
-    })
-    .then(xmlString => {
+    body: JSON.stringify({ url: url })
+  }).then(response => {
+    if (!response.ok) {
+      throw new Error("Proxy error fetching URL: " + url);
+    }
+    return response.text();
+  });
+}
+
+
+
+function processSitemap(sitemapUrl, category) {
+  return fetchViaProxy(sitemapUrl, "GET")
+    .then(text => {
       const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(xmlString, "application/xml");
-      if (xmlDoc.getElementsByTagName("parsererror").length) {
-        throw new Error("Error parsing XML from " + sitemapUrl);
-      }
-      const urlElements = xmlDoc.getElementsByTagName("url");
-      const urlsArray = [];
-      for (let i = 0; i < urlElements.length; i++) {
-        const locEl = urlElements[i].getElementsByTagName("loc")[0];
-        const lastmodEl = urlElements[i].getElementsByTagName("lastmod")[0];
-        const loc = locEl ? locEl.textContent.trim() : null;
-        const lastmod = lastmodEl ? lastmodEl.textContent.trim() : null;
-        if (loc && loc.startsWith(baseUrl)) {
-          urlsArray.push({ url: loc, creationDate: lastmod });
+      let urls = [];
+      // Try parsing as XML first.
+      let xmlDoc = parser.parseFromString(text, "application/xml");
+      let locElements = xmlDoc.getElementsByTagName("loc");
+
+      if (locElements && locElements.length > 0 && locElements[0].textContent) {
+        // Standard XML sitemap found.
+        for (let i = 0; i < locElements.length; i++) {
+          const urlStr = locElements[i].textContent.trim();
+          urls.push({ url: urlStr, category: category });
+        }
+      } else {
+        // Fallback: parse as HTML (for WordPress sitemaps rendered as a table).
+        let htmlDoc = parser.parseFromString(text, "text/html");
+        const table = htmlDoc.getElementById("sitemap__table");
+        if (table) {
+          const rows = table.querySelectorAll("tbody tr");
+          rows.forEach(row => {
+            const anchor = row.querySelector("td.loc a");
+            if (anchor) {
+              const urlStr = anchor.href.trim();
+              urls.push({ url: urlStr, category: category });
+            }
+          });
         }
       }
-      return urlsArray;
+      return urls;
     })
     .catch(error => {
-      console.error("Error in parseSitemap for " + sitemapUrl, error);
+      console.error("Error processing sitemap for", sitemapUrl, error);
+      // Return an empty array so that one failed sitemap doesn't break the overall process.
       return [];
     });
 }
 
-/* ------------------- Accordion Sidebar Functions ------------------- */
+  
+  
 
-function buildTree(posts) {
-  const tree = {};
-  posts.forEach(post => {
-    try {
-      const urlObj = new URL(post.url);
-      const parts = urlObj.pathname.split('/').filter(Boolean);
-      let current = tree;
-      parts.forEach((part, i) => {
-        if (!current[part]) {
-          current[part] = { name: part, children: {} };
-        }
-        if (i === parts.length - 1) {
-          current[part].post = post;
-        }
-        current = current[part].children;
-      });
-    } catch (e) {
-      console.error("Error building tree for URL:", post.url, e);
+  // buildSiteSitemap: For a given site, fetch and process each sitemap file and group results by category.
+  function buildSiteSitemap(site) {
+    const cleanBaseUrl = site.baseUrl.replace(/\/+$/, "");
+    let sitemaps;
+    if (site.type === "wordpress") {
+      // Use WordPress-specific sitemap endpoints
+      sitemaps = [
+        { url: cleanBaseUrl + "/wp-sitemap-posts-post-1.xml", category: "posts" },
+        { url: cleanBaseUrl + "/wp-sitemap-posts-page-1.xml", category: "pages" },
+        { url: cleanBaseUrl + "/wp-sitemap-taxonomies-category-1.xml", category: "categories" },
+        { url: cleanBaseUrl + "/wp-sitemap-taxonomies-post_tag-1.xml", category: "post_tags" },
+        { url: cleanBaseUrl + "/wp-sitemap-users-1.xml", category: "authors" }
+      ];
+    } else {
+      // Use default sitemap endpoints (e.g., for Ghost sites)
+      sitemaps = [
+        { url: cleanBaseUrl + "/sitemap-pages.xml", category: "pages" },
+        { url: cleanBaseUrl + "/sitemap-posts.xml", category: "posts" },
+        { url: cleanBaseUrl + "/sitemap-authors.xml", category: "authors" },
+        { url: cleanBaseUrl + "/sitemap-tags.xml", category: "tags" }
+      ];
     }
-  });
-  return tree;
-}
-
-function renderTree(tree, container) {
-  const ul = document.createElement("ul");
-  for (const key in tree) {
-    const node = tree[key];
-    const li = document.createElement("li");
-    const header = document.createElement("div");
-    header.textContent = node.name;
-    header.style.cursor = "pointer";
-    header.style.fontWeight = "bold";
-    header.style.padding = "4px 0";
-    li.appendChild(header);
-    if (Object.keys(node.children).length > 0) {
-      const childContainer = document.createElement("div");
-      childContainer.style.display = "none";
-      header.addEventListener("click", () => {
-        childContainer.style.display = (childContainer.style.display === "none") ? "block" : "none";
-      });
-      renderTree(node.children, childContainer);
-      li.appendChild(childContainer);
-    } else if (node.post) {
-      header.addEventListener("click", () => {
-        loadPostContent(node.post.url);
-      });
-    }
-    ul.appendChild(li);
-  }
-  container.appendChild(ul);
-}
-
-function updateSidebarFromSitemap() {
-  const menu = document.getElementById("menu");
-  if (!menu) return;
-  const filterInput = document.getElementById("menuFilter");
-  menu.innerHTML = "";
-  if (filterInput) {
-    menu.appendChild(filterInput);
-  }
-  
-  // Render the cache trigger button.
-  renderCacheTrigger();
-  
-  const currentSite = sites[selectedSiteIndex];
-  if (!currentSite || !currentSite.sitemapTree) return;
-  
-  const sections = currentSite.sitemapTree;
-  for (let section in sections) {
-    let items = sections[section]; // Array of { url, creationDate }
-    
-    // Apply filter if filter input exists.
-    if (filterInput && filterInput.value) {
-      const filterText = filterInput.value.toLowerCase();
-      items = items.filter(item =>
-        item.url.toLowerCase().includes(filterText) ||
-        (item.creationDate && item.creationDate.toLowerCase().includes(filterText))
-      );
-    }
-    
-    const sectionHeader = document.createElement("div");
-    sectionHeader.textContent = section.toUpperCase() + " (" + items.length + ")";
-    sectionHeader.style.cursor = "pointer";
-    sectionHeader.style.fontWeight = "bold";
-    sectionHeader.style.padding = "4px 0";
-    sectionHeader.classList.add("folder-item");
-    
-    const itemContainer = document.createElement("div");
-    itemContainer.style.display = accordionState[section] ? "block" : "none";
-    
-    // When user clicks the folder header, toggle display and recheck the folder's documents.
-    sectionHeader.addEventListener("click", function() {
-      if (itemContainer.style.display === "none") {
-        itemContainer.style.display = "block";
-        accordionState[section] = true;
-        sectionHeader.classList.add("open");
-        // Recheck only the documents in this folder.
-        recheckFolderDocuments(items);
-      } else {
-        itemContainer.style.display = "none";
-        accordionState[section] = false;
-        sectionHeader.classList.remove("open");
-      }
-    });
-    
-    const ul = document.createElement("ul");
-    items.forEach(item => {
-      const li = document.createElement("li");
-      const a = document.createElement("a");
-      try {
-        const urlObj = new URL(item.url);
-        a.textContent = (urlObj.pathname && urlObj.pathname !== "/") ? urlObj.pathname : urlObj.hostname;
-      } catch (e) {
-        a.textContent = item.url;
-      }
-      a.href = "#";
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        loadPostContent(item.url);
-      });
-      li.appendChild(a);
-      
-      const statusSpan = document.createElement("span");
-      const status = documentCacheStatus[item.url];
-      if (status === "success") {
-        statusSpan.textContent = " ✅";
-      } else if (status === "loading") {
-        statusSpan.textContent = " ⚙️";
-      } else if (status === "failed") {
-        statusSpan.textContent = " ⭕";
-      } else {
-        statusSpan.textContent = "";
-      }
-      li.appendChild(statusSpan);
-      
-      if (item.creationDate) {
-        const dateSpan = document.createElement("span");
-        dateSpan.textContent = " (" + item.creationDate + ")";
-        li.appendChild(dateSpan);
-      }
-      ul.appendChild(li);
-    });
-    itemContainer.appendChild(ul);
-    menu.appendChild(sectionHeader);
-    menu.appendChild(itemContainer);
-  }
-}
-
-/**
- * Load post content: try loading from IndexedDB first.
- * Data is fetched from the network only if not cached or if forceFetch is true.
- */
-function loadPostContent(url, forceFetch = false) {
-  const contentArea = document.getElementById("content");
-  if (!contentArea) return;
-  
-  contentArea.innerHTML = "<p>Loading content...</p>";
-  
-  if (!forceFetch) {
-    getDocumentByUrl(url)
-      .then(doc => {
-        if (doc && doc.content) {
-          console.log("Loaded document from IndexedDB:", url);
-          documentCacheStatus[url] = "success";
-          updateSidebarFromSitemap();
-          contentArea.innerHTML = `<h2>${doc.title}</h2>${doc.content}`;
-        } else {
-          cacheDocument(url);
-        }
-      })
-      .catch(err => {
-        console.error("Error retrieving document from cache:", err);
-        cacheDocument(url);
-      });
-  } else {
-    cacheDocument(url);
-  }
-}
-
-/* ------------------- Site Switcher Popup Functions ------------------- */
-
-function updateSiteSwitcherPopup() {
-  let popup = document.getElementById("siteSwitcherPopup");
-  if (!popup) {
-    popup = document.createElement("div");
-    popup.id = "siteSwitcherPopup";
-    applyStyles(popup, siteSwitcherPopupStyles);
-    document.body.appendChild(popup);
-  }
-  popup.innerHTML = "<h3>Select a Site</h3>";
-  const ul = document.createElement("ul");
-  sites.forEach((site, index) => {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    const displayName = site.name ? site.name : site.baseUrl;
-    btn.textContent = displayName + " (" + site.baseUrl + ")";
-    btn.style.margin = "5px";
-    btn.addEventListener("click", () => {
-      selectedSiteIndex = index;
-      updateHeaderTitle();
-      updateSidebarFromSitemap();
-        // Recheck cached documents for the newly selected site.
-        setTimeout(() => {
-          recheckCachedDocuments();
-        }, 500);
-      popup.style.display = "none";
-    });
-    li.appendChild(btn);
-    ul.appendChild(li);
-  });
-  popup.appendChild(ul);
-}
-
-function showSiteSwitcherPopup() {
-  const popup = document.getElementById("siteSwitcherPopup");
-  if (popup) {
-    popup.style.display = "block";
-  }
-}
-
-/* ------------------- Burger Menu Setup ------------------- */
-
-function setupBurgerMenu() {
-  const burger = document.createElement("div");
-  burger.textContent = "☰";
-  applyStyles(burger, burgerButtonStyles);
-  const menu = document.createElement("div");
-  applyStyles(menu, burgerPopupStyles);
-  
-  function createButton(text, clickHandler) {
-    const button = document.createElement("button");
-    button.textContent = text;
-    applyStyles(button, popupButtonStyles);
-    button.addEventListener('mouseenter', () => {
-      button.style.backgroundColor = "#0056b3";
-    });
-    button.addEventListener('mouseleave', () => {
-      button.style.backgroundColor = "#007bff";
-    });
-    button.addEventListener('mousedown', () => {
-      button.style.transform = "scale(0.95)";
-    });
-    button.addEventListener('mouseup', () => {
-      button.style.transform = "scale(1)";
-    });
-    button.addEventListener('click', clickHandler);
-    return button;
-  }
-  
-  const switchSiteBtn = createButton("Switch Site", () => {
-    showSiteSwitcherPopup();
-  });
-  const addSiteBtn = createButton("Add Site", () => {
-    const sitemapUrl = prompt("Enter the sitemap URL for the new site:");
-    if (sitemapUrl) {
-      fetchSitemap(sitemapUrl)
-        .then(urls => {
-          const a = document.createElement("a");
-          a.href = sitemapUrl;
-          const siteName = a.hostname;
-          const newSite = {
-            url: sitemapUrl,
-            posts: urls.map(url => ({ url: url, title: cleanTitle(url) })),
-            isDefault: false,
-            name: siteName
-          };
-          sites.push(newSite);
-          selectedSiteIndex = sites.length - 1;
-          updateSidebarFromSitemap();
-          alert(`Added new site: ${siteName}`);
-        })
-        .catch(err => {
-          console.error("Error adding new site:", err);
-          alert("Failed to add site. Please check the URL.");
+    return Promise.all(sitemaps.map(item => processSitemap(item.url, item.category)))
+      .then(results => {
+        // Flatten the array of arrays into a single array.
+        const flat = results.flat();
+        // Group by category.
+        const sitemapTree = {};
+        flat.forEach(entry => {
+          if (!sitemapTree[entry.category]) {
+            sitemapTree[entry.category] = [];
+          }
+          sitemapTree[entry.category].push(entry);
         });
+        return sitemapTree;
+      });
+  }
+  
+  // ---------------------- Sidebar Functions ----------------------
+  function renderCacheTrigger() {
+    const menu = document.getElementById("menu");
+    if (!menu) return;
+    const existing = document.getElementById("cacheTriggerContainer");
+    if (existing) existing.remove();
+    if (cachingInProgress) return;
+    const container = document.createElement("div");
+    container.id = "cacheTriggerContainer";
+    container.style.display = "flex";
+    container.style.alignItems = "center";
+    container.style.gap = "0.5rem";
+    const trigger = document.createElement("span");
+    trigger.textContent = "▶️";
+    trigger.style.fontSize = "2rem";
+    trigger.style.cursor = "pointer";
+    trigger.title = "Click to update (re-cache) documents for this site";
+    trigger.addEventListener("click", () => {
+      if (!cachingInProgress) updateDataViaProxy();
+    });
+    container.appendChild(trigger);
+    if (lastUpdateTimestamp) {
+      const ts = document.createElement("span");
+      ts.textContent = `Last update: ${lastUpdateTimestamp}`;
+      ts.style.fontSize = "0.9rem";
+      container.appendChild(ts);
     }
-  });
-  const deleteSiteBtn = createButton("Delete Site", () => {
-    if (sites[selectedSiteIndex] && sites[selectedSiteIndex].isDefault) {
-      alert("Default sites cannot be deleted.");
+    menu.insertBefore(container, menu.firstChild);
+  }
+
+  function updateSidebarFromSitemap() {
+    const menu = document.getElementById("menu");
+    if (!menu) return;
+    menu.innerHTML = "";
+    renderCacheTrigger();
+    const currentSite = sites[selectedSiteIndex];
+    if (!currentSite) return;
+    
+    // Hardcoded categories based on site type.
+    let folders = [];
+    if (currentSite.type === "ghost") {
+      folders = ["posts", "pages", "authors", "tags"];
+    } else if (currentSite.type === "wordpress") {
+      folders = ["posts", "pages", "categories", "post_tags"];
+    }
+    
+    folders.forEach(category => {
+      const sectionHeader = document.createElement("div");
+      sectionHeader.classList.add("folder-item");
+      sectionHeader.textContent = category.toUpperCase();
+      sectionHeader.style.cursor = "pointer";
+      sectionHeader.style.fontWeight = "bold";
+      sectionHeader.style.padding = "4px 0";
+      
+      const itemContainer = document.createElement("div");
+      // Always create the container, defaulting to hidden.
+      itemContainer.style.display = "none";
+      
+      sectionHeader.addEventListener("click", function() {
+        if (itemContainer.style.display === "none") {
+          itemContainer.style.display = "block";
+          accordionState[category] = true;
+          sectionHeader.classList.add("open");
+          console.log(`Folder "${category}" opened.`);
+          
+          // Always retrieve documents from IndexedDB.
+          getDocumentsForFolder(category)
+            .then(docs => {
+              console.log(`Folder "${category}" retrieved ${docs.length} documents.`);
+              renderFolderDocuments(itemContainer, docs);
+            })
+            .catch(err => {
+              console.error(`Error retrieving documents for folder "${category}":`, err);
+              itemContainer.textContent = "Error retrieving documents.";
+            });
+        } else {
+          itemContainer.style.display = "none";
+          accordionState[category] = false;
+          sectionHeader.classList.remove("open");
+          console.log(`Folder "${category}" closed.`);
+        }
+      });
+      
+      
+      menu.appendChild(sectionHeader);
+      menu.appendChild(itemContainer);
+    });
+  }
+  
+
+  function renderFolderDocuments(container, docs) {
+    container.innerHTML = "";
+    if (docs.length === 0) {
+      container.textContent = "No cached documents in this folder.";
       return;
     }
-    if (confirm(`Are you sure you want to delete site: ${sites[selectedSiteIndex].name || sites[selectedSiteIndex].baseUrl}?`)) {
-      sites.splice(selectedSiteIndex, 1);
-      if (selectedSiteIndex >= sites.length) selectedSiteIndex = 0;
-      updateSidebarFromSitemap();
-      alert("Site deleted.");
-    }
-  });
-  
-  menu.appendChild(switchSiteBtn);
-  menu.appendChild(addSiteBtn);
-  menu.appendChild(deleteSiteBtn);
-  
-  burger.addEventListener("click", () => {
-    menu.style.display = (menu.style.display === "none") ? "block" : "none";
-  });
-  
-  document.body.appendChild(burger);
-  document.body.appendChild(menu);
-}
-
-/**
- * Toggle dark/light mode.
- */
-function toggleMode() {
-  const body = document.body;
-  const toggleElem = document.getElementById("toggleMode");
-  if (body.classList.contains("dark")) {
-    body.classList.remove("dark");
-    body.classList.add("light");
-    toggleElem.textContent = "🌑"; 
-  } else {
-    body.classList.remove("light");
-    body.classList.add("dark");
-    toggleElem.textContent = "⚪"; 
-  }
-}
-
-/**
- * Cache a single document offline.
- */
-function cacheDocument(url) {
-  documentCacheStatus[url] = "loading";
-  updateSidebarFromSitemap();
-  return fetch("https://mpantsaka.kahiether.com/proxy", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: url, action: "FETCH_DOCUMENT" })
-  })
-    .then(response => {
-      if (!response.ok) {
-        throw new Error("Proxy error fetching document: " + url);
-      }
-      return response.text();
-    })
-    .then(html => {
-      const baseUrl = sites[selectedSiteIndex].baseUrl;
-      const processedHTML = processHTML(html, baseUrl);
-      const sanitizedHTML = sanitizeContent(processedHTML);
-      
-      const titleMatch = processedHTML.match(/<title>(.*?)<\/title>/i);
-      const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : url;
-      
-      let path = "";
-      let depth = 0;
-      try {
-        const urlObj = new URL(url);
-        path = urlObj.pathname;
-        depth = path.split('/').filter(Boolean).length;
-      } catch (e) {
-        console.error("Error parsing URL for document", url, e);
-      }
-      
-      const docObj = {
-        uuid: generateUUID(),
-        originalUrl: url,
-        content: sanitizedHTML,
-        title: title,
-        path: path,
-        depth: depth,
-        createDate: new Date().toISOString(),
-        updateDate: new Date().toISOString()
-      };
-      
-      return storeDocument(docObj);
-    })
-    .then(() => {
-      documentCacheStatus[url] = "success";
-      updateSidebarFromSitemap();
-    })
-    .catch(err => {
-      console.error("Error caching document:", url, err);
-      documentCacheStatus[url] = "failed";
-      updateSidebarFromSitemap();
+    const ul = document.createElement("ul");
+    docs.forEach(doc => {
+      const li = document.createElement("li");
+      li.style.cursor = "pointer";
+      li.textContent = doc.title || doc.originalUrl;
+      const checkMark = document.createElement("span");
+      checkMark.textContent = " ✅";
+      li.appendChild(checkMark);
+      li.addEventListener("click", () => {
+        loadPostContent(doc.originalUrl);
+      });
+      ul.appendChild(li);
     });
-}
-
-/**
- * Cache all documents from the current site's sitemap tree.
- */
-function cacheAllDocuments() {
-  cachingInProgress = true;
-  renderCacheTrigger();
-  const currentSite = sites[selectedSiteIndex];
-  if (!currentSite || !currentSite.sitemapTree) {
-    cachingInProgress = false;
-    renderCacheTrigger();
-    return;
+    container.appendChild(ul);
   }
-  const sections = currentSite.sitemapTree;
-  const promises = [];
-  for (let section in sections) {
-    const items = sections[section];
-    items.forEach(item => {
-      if (!documentCacheStatus[item.url] || documentCacheStatus[item.url] !== "success") {
-        promises.push(cacheDocument(item.url));
-      }
-    });
-  }
-  Promise.all(promises).then(() => {
-    cachingInProgress = false;
-    renderCacheTrigger();
-    updateSidebarFromSitemap();
-  });
-}
 
-/**
- * Sanitize HTML content.
- */
-function sanitizeContent(html) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, "text/html");
-  doc.querySelectorAll("img").forEach(el => {
-    const altText = el.alt || "Image";
-    const placeholder = document.createElement("span");
-    placeholder.textContent = `[${altText}]`;
-    el.parentNode.replaceChild(placeholder, el);
-  });
-  doc.querySelectorAll("video").forEach(el => {
-    const placeholder = document.createElement("span");
-    placeholder.textContent = `[Video]`;
-    el.parentNode.replaceChild(placeholder, el);
-  });
-  doc.querySelectorAll("audio").forEach(el => {
-    const placeholder = document.createElement("span");
-    placeholder.textContent = `[Audio]`;
-    el.parentNode.replaceChild(placeholder, el);
-  });
-  doc.querySelectorAll("svg").forEach(el => {
-    const placeholder = document.createElement("span");
-    placeholder.textContent = `[SVG]`;
-    el.parentNode.replaceChild(placeholder, el);
-  });
-  doc.querySelectorAll("a").forEach(el => {
-    const href = el.getAttribute("href");
-    if (href && (href.endsWith('.pdf') || href.endsWith('.doc') || href.endsWith('.docx') ||
-                 href.endsWith('.xls') || href.endsWith('.xlsx'))) {
-      const replacement = document.createElement("span");
-      replacement.textContent = `[File: ${href}]`;
-      el.parentNode.replaceChild(replacement, el);
+  // ---------------------- Document Functions ----------------------
+  function loadPostContent(url, forceFetch = false) {
+    const contentArea = document.getElementById("content");
+    if (!contentArea) return;
+    contentArea.innerHTML = "<p>Loading content...</p>";
+    if (!forceFetch) {
+      getDocumentByUrl(url)
+        .then(doc => {
+          if (doc && doc.content) {
+            console.log("Loaded document from IndexedDB:", url);
+            contentArea.innerHTML = `<h2>${doc.title}</h2>${doc.content}`;
+          } else {
+            cacheDocument(url, null);
+          }
+        })
+        .catch(err => {
+          console.error("Error retrieving document from cache:", err);
+          cacheDocument(url, null);
+        });
     } else {
-      el.removeAttribute("href");
+      cacheDocument(url, null);
     }
-  });
-  return doc.body.innerHTML;
-}
+  }
 
-/**
- * Load Site Data: Use cached data if available; otherwise, fetch fresh data.
- */
-function loadSiteData(site) {
-  return getSite(site.id).then(cachedSite => {
-    if (cachedSite && cachedSite.sitemapTree) {
-      console.log("Loaded site from cache:", site.id);
-      site.sitemapTree = cachedSite.sitemapTree;
-      return site;
-    } else {
-      return navigator.onLine ? fetchSiteDataViaProxy(site) : site;
-    }
-  }).catch(err => {
-    console.error("Error loading site data for", site.id, err);
-    return buildSiteSitemap(site).then(sitemapTree => {
-      site.sitemapTree = sitemapTree;
-      const now = new Date().toISOString();
-      const siteObj = {
-        uuid: site.id,
-        baseUrl: site.baseUrl,
-        createDate: now,
-        updateDate: now,
-        sitemapTree: sitemapTree,
-        isDefault: site.isDefault || false
-      };
-      storeSite(siteObj);
-      storeFoldersFromSitemap(site);
-      return site;
-    });
-  });
-}
-
-/**
- * Extract folder information from the site's sitemap tree and store in IndexedDB.
- */
-function storeFoldersFromSitemap(site) {
-  if (!site.sitemapTree) return;
-  Object.keys(site.sitemapTree).forEach(section => {
-    site.sitemapTree[section].forEach(item => {
-      try {
-        const urlObj = new URL(item.url);
-        const path = urlObj.pathname;
-        const pathParts = path.split('/').filter(Boolean);
-        const folder = {
+  // Modified to accept category.
+  function cacheDocument(url, category) {
+    console.log("Caching document:", url);
+    return fetch("https://mpantsaka.kahiether.com/proxy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: url, action: "FETCH_DOCUMENT" })
+    })
+      .then(response => {
+        if (!response.ok) throw new Error("Proxy error fetching document: " + url);
+        return response.text();
+      })
+      .then(html => {
+        console.log("Received HTML for", url, html.substring(0, 100) + "...");
+        const baseUrl = sites[selectedSiteIndex].baseUrl;
+        // Process images etc.
+        let processedHTML = processHTML(html, baseUrl);
+        // Remove hyperlinks from the processed HTML.
+        processedHTML = removeHyperlinks(processedHTML);
+        const sanitizedHTML = sanitizeContent(processedHTML);
+        const titleMatch = processedHTML.match(/<title>(.*?)<\/title>/i);
+        const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : url;
+        let path = "", depth = 0;
+        try {
+          const urlObj = new URL(url);
+          path = urlObj.pathname;
+          depth = path.split('/').filter(Boolean).length;
+        } catch (e) {
+          console.error("Error parsing URL for document", url, e);
+        }
+        const docObj = {
           uuid: generateUUID(),
-          siteId: site.id,
-          url: item.url,
+          siteId: sites[selectedSiteIndex].id, // or store sites[selectedSiteIndex].baseUrl
+          originalUrl: url,
+          content: sanitizedHTML,
+          title: title,
           path: path,
-          depth: pathParts.length,
+          depth: depth,
+          category: category || "unknown",
           createDate: new Date().toISOString(),
           updateDate: new Date().toISOString()
         };
-        storeFolder(folder);
-      } catch (error) {
-        console.error("Error creating folder for", item.url, error);
-      }
-    });
-  });
-}
-
-/**
- * Retrieve all folder records for a given site.
- */
-function getFoldersBySite(siteId) {
-  return openDatabase().then(db => {
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction([FOLDER_STORE], "readonly");
-      const store = transaction.objectStore(FOLDER_STORE);
-      const index = store.index("siteId");
-      const request = index.getAll(siteId);
-      request.onsuccess = (event) => {
-        resolve(event.target.result);
-      };
-      request.onerror = (event) => reject(event.target.error);
-    });
-  });
-}
-
-// Filter sidebar items.
-function filterSidebarItems() {
-  const filterInput = document.getElementById("menuFilter");
-  const filterText = filterInput ? filterInput.value : "";
-  const items = document.querySelectorAll("#menu ul li");
-  let regex;
-  try {
-    regex = new RegExp(filterText, "i");
-  } catch (e) {
-    regex = null;
-  }
-  items.forEach(function(li) {
-    const text = li.textContent;
-    li.style.display = regex ? (regex.test(text) ? "" : "none") : (text.toLowerCase().includes(filterText.toLowerCase()) ? "" : "none");
-  });
-}
-
-// Force an update from the server.
-function forceUpdateVersion() {
-  fetch("version.txt", { cache: "no-store" })
-    .then(function(response) {
-      if (!response.ok) throw new Error("Network error while fetching version info.");
-      return response.text();
-    })
-    .then(function(serverVersion) {
-      location.reload();
-    })
-    .catch(function(error) {
-      alert("Unable to update version: no network available.");
-    });
-}
-
-// Proxy function to update data via proxy. (Triggered by the ▶️ button)
-function updateDataViaProxy() {
-  if (!navigator.onLine) {
-    console.log("Offline: Skipping updateDataViaProxy");
-    return Promise.resolve();
-  }
-
-  cachingInProgress = true;
-  renderCacheTrigger();
-
-  const currentSite = sites[selectedSiteIndex];
-  
-  buildSiteSitemap(currentSite)
-    .then(sitemapTree => {
-      console.log("Proxy update complete via buildSiteSitemap:", sitemapTree);
-      currentSite.sitemapTree = sitemapTree;
-      lastUpdateTimestamp = new Date().toLocaleString();
-      storeSite({
-        uuid: currentSite.id,
-        baseUrl: currentSite.baseUrl,
-        createDate: new Date().toISOString(),
-        updateDate: new Date().toISOString(),
-        sitemapTree: sitemapTree,
-        isDefault: currentSite.isDefault || false
-      });
-      storeFoldersFromSitemap(currentSite);
-      cacheAllDocuments();
-    })
-    .catch(error => {
-      console.error("Proxy update error:", error);
-    })
-    .finally(() => {
-      cachingInProgress = false;
-      renderCacheTrigger();
-    });
-}
-
-// Proxy function to fetch site data via proxy.
-function fetchSiteDataViaProxy(site) {
-  if (!navigator.onLine) {
-    console.log("Offline: Using cached site data for", site.baseUrl);
-    return Promise.resolve(site);
-  }
-  
-  cachingInProgress = true;
-  renderCacheTrigger();
-
-  return buildSiteSitemap(site)
-    .then(sitemapTree => {
-      site.sitemapTree = sitemapTree;
-      storeSite({
-        uuid: site.id,
-        baseUrl: site.baseUrl,
-        createDate: new Date().toISOString(),
-        updateDate: new Date().toISOString(),
-        sitemapTree: sitemapTree,
-        isDefault: site.isDefault || false
-      });
-      storeFoldersFromSitemap(site);
-      return site;
-    })
-    .catch(err => {
-      console.error("Error fetching site data via proxy:", err);
-      throw err;
-    })
-    .finally(() => {
-      cachingInProgress = false;
-      renderCacheTrigger();
-    });
-}
-
-
-function recheckCachedDocuments() {
-  const currentSite = sites[selectedSiteIndex];
-  if (!currentSite || !currentSite.sitemapTree) {
-    console.log("No current site or sitemapTree available for recheck.");
-    return;
-  }
-  
-  // Collect all URLs from the current site's sitemap tree.
-  const urls = [];
-  const sections = currentSite.sitemapTree;
-  for (let section in sections) {
-    sections[section].forEach(item => {
-      urls.push(item.url);
-    });
-  }
-  console.log("Rechecking cached documents for URLs:", urls);
-  
-  // Recheck each document
-  const promises = urls.map(url => {
-    return getDocumentByUrl(url)
-      .then(doc => {
-        if (doc && doc.content) {
-          documentCacheStatus[url] = "success";
-        } else {
-          documentCacheStatus[url] = "notFound";
-        }
+        console.log("Storing document:", docObj);
+        return storeDocument(docObj);
+      })
+      .then(() => {
+        console.log("Document cached successfully:", url);
       })
       .catch(err => {
-        console.error("Error rechecking document:", url, err);
-        documentCacheStatus[url] = "failed";
+        console.error("Error caching document:", url, err);
       });
-  });
+  }
   
-  Promise.all(promises).then(() => {
-    console.log("Recheck complete. documentCacheStatus:", documentCacheStatus);
-    updateSidebarFromSitemap();
-  });
-}
+  function cacheAllDocuments() {
+    cachingInProgress = true;
+    renderCacheTrigger();
+    const currentSite = sites[selectedSiteIndex];
+    if (!currentSite || !currentSite.sitemapTree) {
+      cachingInProgress = false;
+      renderCacheTrigger();
+      return;
+    }
+    const sitemapTree = currentSite.sitemapTree;
+    const promises = [];
+    Object.keys(sitemapTree).forEach(category => {
+      sitemapTree[category].forEach(item => {
+        promises.push(
+          getDocumentByUrl(item.url).then(doc => {
+            if (!(doc && doc.content)) {
+              return cacheDocument(item.url, category);
+            }
+          })
+        );
+      });
+    });
+    Promise.all(promises).then(() => {
+      cachingInProgress = false;
+      renderCacheTrigger();
+      updateSidebarFromSitemap();
+    });
+  }
 
-function recheckFolderDocuments(items) {
-  const promises = items.map(item => {
-    return getDocumentByUrl(item.url)
-      .then(doc => {
-        if (doc && doc.content) {
-          documentCacheStatus[item.url] = "success";
-        } else {
-          documentCacheStatus[item.url] = "notFound";
-        }
+  // ---------------------- Proxy & Update Functions ----------------------
+  function forceUpdateVersion() {
+    fetch("version.txt", { cache: "no-store" })
+      .then(response => {
+        if (!response.ok) throw new Error("Network error while fetching version info.");
+        return response.text();
+      })
+      .then(serverVersion => { location.reload(); })
+      .catch(error => { alert("Unable to update version: no network available."); });
+  }
+
+  function updateDataViaProxy() {
+    if (!navigator.onLine) {
+      console.log("Offline: Skipping updateDataViaProxy");
+      return Promise.resolve();
+    }
+    cachingInProgress = true;
+    renderCacheTrigger();
+    const currentSite = sites[selectedSiteIndex];
+    buildSiteSitemap(currentSite)
+      .then(sitemapTree => {
+        console.log("Proxy update complete via buildSiteSitemap:", sitemapTree);
+        currentSite.sitemapTree = sitemapTree;
+        lastUpdateTimestamp = new Date().toLocaleString();
+        storeSite({
+          uuid: currentSite.id,
+          baseUrl: currentSite.baseUrl,
+          createDate: new Date().toISOString(),
+          updateDate: new Date().toISOString(),
+          sitemapTree: sitemapTree,
+          isDefault: currentSite.isDefault || false
+        });
+        cacheAllDocuments();
+      })
+      .catch(error => { console.error("Proxy update error:", error); })
+      .finally(() => {
+        cachingInProgress = false;
+        renderCacheTrigger();
+      });
+  }
+
+  function fetchSiteDataViaProxy(site) {
+    if (!navigator.onLine) {
+      console.log("Offline: Using cached site data for", site.baseUrl);
+      return Promise.resolve(site);
+    }
+    cachingInProgress = true;
+    renderCacheTrigger();
+    return buildSiteSitemap(site)
+      .then(sitemapTree => {
+        site.sitemapTree = sitemapTree;
+        storeSite({
+          uuid: site.id,
+          baseUrl: site.baseUrl,
+          createDate: new Date().toISOString(),
+          updateDate: new Date().toISOString(),
+          sitemapTree: sitemapTree,
+          isDefault: site.isDefault || false
+        });
+        return site;
       })
       .catch(err => {
-        console.error("Error rechecking document:", item.url, err);
-        documentCacheStatus[item.url] = "failed";
+        console.error("Error fetching site data via proxy:", err);
+        throw err;
+      })
+      .finally(() => {
+        cachingInProgress = false;
+        renderCacheTrigger();
       });
-  });
-  Promise.all(promises).then(() => {
-    // After checking, re-render the sidebar (or update only the folder's DOM if you prefer)
-    updateSidebarFromSitemap();
-  });
-}
+  }
 
+  // ---------------------- Site Switcher & Burger Menu ----------------------
+  function updateSiteSwitcherPopup() {
+    let popup = document.getElementById("siteSwitcherPopup");
+    if (!popup) {
+      popup = document.createElement("div");
+      popup.id = "siteSwitcherPopup";
+      applyStyles(popup, siteSwitcherPopupStyles); // Assume defined in style.js
+      document.body.appendChild(popup);
+    }
+    popup.innerHTML = "<h3>Select a Site</h3>";
+    const ul = document.createElement("ul");
+    sites.forEach((site, index) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      const displayName = site.name ? site.name : site.baseUrl;
+      btn.textContent = displayName + " (" + site.baseUrl + ")";
+      btn.style.margin = "5px";
+      btn.addEventListener("click", () => {
+        selectedSiteIndex = index;
+        updateHeaderTitle();
+        updateSidebarFromSitemap();
+        popup.style.display = "none";
+      });
+      li.appendChild(btn);
+      ul.appendChild(li);
+    });
+    popup.appendChild(ul);
+  }
+
+
+  function showSiteSwitcherPopup() {
+    const popup = document.getElementById("siteSwitcherPopup");
+    if (popup) {
+      // In this example, we simply ensure it’s visible.
+      popup.style.display = "block";
+      popup.style.opacity = "1";
+    } else {
+      console.error("Site switcher popup element not found.");
+    }
+  }
+  
+  
+
+
+function setupBurgerMenu() {
+  // Create the burger button element.
+  const burger = document.createElement("div");
+  burger.id = "burgerButton"; // Ensure this ID matches your style.js selector.
+  burger.textContent = "☰";
+  
+  // Apply burger button styles from your style.js
+  if (window.applyStyles && window.burgerButtonStyles) {
+    applyStyles(burger, window.burgerButtonStyles);
+  }
+  // Ensure centering (in case it's not fully applied)
+  burger.style.display = "flex";
+  burger.style.alignItems = "center";
+  burger.style.justifyContent = "center";
+  
+  // Create the popup container for the site switcher.
+  const popup = document.createElement("div");
+  popup.id = "siteSwitcherPopup"; // This should match the selector in your style.js.
+  if (window.applyStyles && window.siteSwitcherPopupStyles) {
+    applyStyles(popup, window.siteSwitcherPopupStyles);
+  }
+  // Initialize the popup as hidden and with zero opacity for fade transition.
+  popup.style.display = "none";
+  popup.style.opacity = "0";
+  popup.style.transition = "opacity 0.3s ease";
+  
+  // Create the "Switch Site" button inside the popup.
+  const switchSiteBtn = document.createElement("button");
+  switchSiteBtn.textContent = "Switch Site";
+  if (window.applyStyles && window.popupButtonStyles) {
+    applyStyles(switchSiteBtn, window.popupButtonStyles);
+  }
+  // When clicked, call showSiteSwitcherPopup (which could open a more complex UI)
+  switchSiteBtn.addEventListener("click", () => {
+    showSiteSwitcherPopup();
+  });
+  popup.appendChild(switchSiteBtn);
+  
+  // When the burger button is clicked, toggle the popup with a fade animation.
+  burger.addEventListener("click", () => {
+    if (popup.style.display === "none" || popup.style.opacity === "0") {
+      // Show the popup.
+      popup.style.display = "block";
+      // Force a reflow so the transition applies.
+      void popup.offsetWidth;
+      popup.style.opacity = "1";
+    } else {
+      // Hide the popup with fade-out.
+      popup.style.opacity = "0";
+      setTimeout(() => {
+        popup.style.display = "none";
+      }, 300);
+    }
+  });
+  
+  // Append the burger button and popup to the document body.
+  document.body.appendChild(burger);
+  document.body.appendChild(popup);
+}
+  
+  
+
+  // ---------------------- Load Default Sites ----------------------
+  function loadDefaultSitesFromJSON() {
+    fetch('default-sites.json')
+      .then(response => {
+        if (!response.ok) throw new Error('Failed to load default sites.');
+        return response.json();
+      })
+      .then(data => {
+        console.log("Loaded JSON:", data);
+        sites = data.defaultSites.map(site => {
+          site.isDefault = true;
+          return site;
+        });
+        console.log("Sites array:", sites);
+        selectedSiteIndex = 0;
+        updateHeaderTitle();
+        updateSidebarFromSitemap();
+        updateSiteSwitcherPopup();
+      })
+      .catch(err => {
+        console.error("Error loading default sites:", err);
+      });
+  }
+
+  // ---------------------- Initialization ----------------------
+  document.addEventListener("DOMContentLoaded", () => {
+    loadDefaultSitesFromJSON();
+    setupBurgerMenu();
+  });
+
+  // Expose some functions if needed.
+  window.updateHeaderTitle = updateHeaderTitle;
+  window.updateSidebarFromSitemap = updateSidebarFromSitemap;
+  window.loadPostContent = loadPostContent;
+  window.forceUpdateVersion = forceUpdateVersion;
+})();

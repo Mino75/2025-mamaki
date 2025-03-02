@@ -1,163 +1,78 @@
-const DB_NAME = "OfflineDocumentsDB";
-// Bump the version to trigger a schema upgrade.
-const DB_VERSION = 2;
+// db.js
 
-// Define our three stores.
+const DB_NAME = "OfflineDocumentsDB";
+const DB_VERSION = 2;
 const SITE_STORE = "sites";
-const FOLDER_STORE = "folders";
 const DOC_STORE = "documents";
 
 /**
- * Generates a random UUID.
- * Example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
- */
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0,
-          v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
-
-/**
- * Open (or create) the IndexedDB database.
+ * Opens (or creates) the IndexedDB database.
  * @returns {Promise<IDBDatabase>}
  */
 function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = function (event) {
+    request.onupgradeneeded = function(event) {
       const db = event.target.result;
-// Create a store for Sites if it doesn't exist.
-if (!db.objectStoreNames.contains(SITE_STORE)) {
-  const siteStore = db.createObjectStore(SITE_STORE, { keyPath: "uuid" });
-  // Create an index on baseUrl if you want to query by it.
-  siteStore.createIndex("baseUrl", "baseUrl", { unique: false });
-}
-
-// Create a store for Folders if it doesn't exist.
-if (!db.objectStoreNames.contains(FOLDER_STORE)) {
-  const folderStore = db.createObjectStore(FOLDER_STORE, { keyPath: "uuid" });
-  // Create an index on siteId for efficient querying.
-  folderStore.createIndex("siteId", "siteId", { unique: false });
-}
-
-// Create a store for Documents if it doesn't exist.
-// Also create an index on originalUrl for faster lookups.
-if (!db.objectStoreNames.contains(DOC_STORE)) {
-  const docStore = db.createObjectStore(DOC_STORE, { keyPath: "uuid" });
-  docStore.createIndex("originalUrl", "originalUrl", { unique: false });
-}
-
+      if (!db.objectStoreNames.contains(SITE_STORE)) {
+        const siteStore = db.createObjectStore(SITE_STORE, { keyPath: "uuid" });
+        siteStore.createIndex("baseUrl", "baseUrl", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(DOC_STORE)) {
+        const docStore = db.createObjectStore(DOC_STORE, { keyPath: "uuid" });
+        docStore.createIndex("originalUrl", "originalUrl", { unique: false });
+      }
     };
-    
-    request.onsuccess = function (event) {
+    request.onsuccess = function(event) {
       resolve(event.target.result);
     };
-    
-    request.onerror = function (event) {
-      reject("Error opening database: " + event.target.error);
+    request.onerror = function(event) {
+      reject(event.target.error);
     };
   });
 }
 
 /**
- * Store a Site object.
- * @param {Object} site - Object with { uuid, baseUrl, createDate, updateDate }.
+ * Stores a site object in the IndexedDB.
+ * @param {Object} site - The site object (should include a unique uuid, baseUrl, etc.)
  * @returns {Promise<void>}
  */
 function storeSite(site) {
-  return openDatabase().then((db) => {
+  return openDatabase().then(db => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction([SITE_STORE], "readwrite");
       const store = tx.objectStore(SITE_STORE);
-      const req = store.put(site);
-      req.onsuccess = () => {
-        console.log("Site stored:", site.uuid);
-        resolve();
-      };
-      req.onerror = (event) => {
-        reject("Error storing site: " + event.target.error);
-      };
+      const request = store.put(site);
+      request.onsuccess = () => resolve();
+      request.onerror = event => reject(event.target.error);
     });
   });
 }
 
 /**
- * Store a Folder object.
- * @param {Object} folder - Object with { uuid, url, path, depth, createDate, updateDate }.
- * @returns {Promise<void>}
- */
-function storeFolder(folder) {
-  return openDatabase().then((db) => {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([FOLDER_STORE], "readwrite");
-      const store = tx.objectStore(FOLDER_STORE);
-      const req = store.put(folder);
-      req.onsuccess = () => {
-        console.log("Folder stored:", folder.uuid);
-        resolve();
-      };
-      req.onerror = (event) => {
-        reject("Error storing folder: " + event.target.error);
-      };
-    });
-  });
-}
-
-/**
- * Store a Document object.
- * @param {Object} doc - Object with { uuid, originalUrl, content, title, path, depth, createDate, updateDate }.
+ * Stores a document object in the IndexedDB.
+ * @param {Object} documentData - The document object (should include a uuid, originalUrl, content, title, path, etc.)
  * @returns {Promise<void>}
  */
 function storeDocument(documentData) {
-  // Ensure that documentData has a uuid. If not, generate one.
   if (!documentData.uuid) {
     documentData.uuid = generateUUID();
   }
   return openDatabase().then(db => {
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction([DOC_STORE], "readwrite");
-      const store = transaction.objectStore(DOC_STORE);
-      console.log("Storing document record:", documentData);
-      const request = store.put(documentData);
-      request.onsuccess = () => {
-        console.log(`Document ${documentData.uuid} stored.`);
-        resolve();
-      };
-      request.onerror = (event) => {
-        reject("Error storing document: " + event.target.error);
-      };
-    });
-  });
-}
-
-/**
- * Retrieve a stored Document by its id.
- * @param {string} id - The document id (uuid).
- * @returns {Promise<Object>}
- */
-function getDocument(id) {
-  return openDatabase().then((db) => {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([DOC_STORE], "readonly");
+      const tx = db.transaction([DOC_STORE], "readwrite");
       const store = tx.objectStore(DOC_STORE);
-      const req = store.get(id);
-      req.onsuccess = (event) => resolve(event.target.result);
-      req.onerror = (event) =>
-        reject("Error retrieving document: " + event.target.error);
+      const request = store.put(documentData);
+      request.onsuccess = () => resolve();
+      request.onerror = event => reject(event.target.error);
     });
   });
 }
 
 /**
- * Retrieves a Site object from IndexedDB using its unique identifier (uuid).
- *
- * This function opens the database, starts a read-only transaction on the
- * SITE_STORE object store, and retrieves the object whose key matches the provided id.
- *
- * @param {string} id - The unique identifier (uuid) of the site to retrieve.
- * @returns {Promise<Object|null>} - A promise that resolves with the site object if found, or null otherwise.
+ * Retrieves a site from the IndexedDB by its uuid.
+ * @param {string} id - The site's uuid.
+ * @returns {Promise<Object|null>}
  */
 function getSite(id) {
   return openDatabase().then(db => {
@@ -165,37 +80,84 @@ function getSite(id) {
       const tx = db.transaction([SITE_STORE], "readonly");
       const store = tx.objectStore(SITE_STORE);
       const request = store.get(id);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject("Error retrieving site: " + event.target.error);
+      request.onsuccess = event => resolve(event.target.result);
+      request.onerror = event => reject(event.target.error);
     });
   });
 }
-
-// Expose the function so that main.js can use it.
-window.getSite = getSite;
 
 /**
- * Count the number of items in the specified store.
- * @param {string} storeName - The name of the object store (e.g., "documents", "sites", "folders").
- * @returns {Promise<number>} - A promise that resolves to the count of items.
+ * Retrieves a document from the IndexedDB by its uuid.
+ * @param {string} id - The document's uuid.
+ * @returns {Promise<Object|null>}
  */
-function countItems(storeName) {
+function getDocument(id) {
   return openDatabase().then(db => {
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction([storeName], "readonly");
-      const store = transaction.objectStore(storeName);
-      const request = store.count();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = (event) =>
-        reject("Error counting items in " + storeName + ": " + event.target.error);
+      const tx = db.transaction([DOC_STORE], "readonly");
+      const store = tx.objectStore(DOC_STORE);
+      const request = store.get(id);
+      request.onsuccess = event => resolve(event.target.result);
+      request.onerror = event => reject("Error retrieving document: " + event.target.error);
     });
   });
 }
 
-// Expose the functions so that main.js can use them.
-window.storeSite = storeSite;
-window.storeFolder = storeFolder;
-window.storeDocument = storeDocument;
-window.getDocument = getDocument;
-window.countItems = countItems;
+/**
+ * Retrieves a document from the IndexedDB by its originalUrl.
+ * @param {string} url - The document's originalUrl.
+ * @returns {Promise<Object|null>}
+ */
+function getDocumentByUrl(url) {
+  return openDatabase().then(db => {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([DOC_STORE], "readonly");
+      const store = tx.objectStore(DOC_STORE);
+      const index = store.index("originalUrl");
+      const request = index.get(url);
+      request.onsuccess = event => resolve(event.target.result);
+      request.onerror = event => reject("Error retrieving document: " + event.target.error);
+    });
+  });
+}
 
+/**
+ * Queries all documents whose "path" property starts with "/" + folderName.
+ * @param {string} folderName - The folder name (e.g. "posts")
+ * @returns {Promise<Array>} - An array of document objects.
+ */
+function getDocumentsForFolder(folderName) {
+  return openDatabase().then(db => {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([DOC_STORE], "readonly");
+      const store = tx.objectStore(DOC_STORE);
+      const docs = [];
+      const request = store.openCursor();
+      request.onsuccess = event => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const doc = cursor.value;
+          if (doc.path && doc.path.startsWith("/" + folderName)) {
+            docs.push(doc);
+          }
+          cursor.continue();
+        } else {
+          resolve(docs);
+        }
+      };
+      request.onerror = event => reject("Error querying documents: " + event.target.error);
+    });
+  });
+}
+
+/**
+ * Generates a UUID.
+ * @returns {string} - A UUID.
+ */
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0,
+          v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}

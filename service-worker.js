@@ -1,5 +1,5 @@
 // Generate a unique cache name based on the current timestamp 
-const CACHE_VERSION = new Date().toISOString(); // e.g., "2025-02-03T00:00:00.000Z"
+const CACHE_VERSION = new Date().toISOString().replace(/:/g, '-');
 const CACHE_NAME = `mamaki-cache-${CACHE_VERSION}`;
 
 const urlsToCache = [
@@ -9,6 +9,7 @@ const urlsToCache = [
   '/style.js',
   '/main.js',
   '/db.js',
+  '/theme.js',
   '/default-sites.json',  // your default sites list
   '/favicon.ico',     
   '/icon-192x192.png',
@@ -58,31 +59,19 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Fetch event: Serve cached content when available, fall back to network if not.
 self.addEventListener('fetch', event => {
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      caches.match('/index.html').then(response => {
-        return response || fetch(event.request);
-      }).catch(() => {
-        return new Response("You are offline. Please check your connection.", {
-          status: 503,
-          statusText: "Offline",
-          headers: new Headers({ 'Content-Type': 'text/plain' })
+  event.respondWith(
+    caches.match(event.request).then(response => {
+      return response || fetch(event.request).catch(() => {
+        if (event.request.mode === 'navigate') {
+          return caches.match('/index.html');
+        }
+        // Always return a fallback Response.
+        return new Response('Network error occurred', {
+          status: 408,
+          statusText: 'Network error'
         });
-      })
-    );
-  } else {
-    event.respondWith(
-      caches.match(event.request).then(response => {
-        return response || fetch(event.request).catch(() => {
-          return new Response("You are offline. Please check your connection.", {
-            status: 503,
-            statusText: "Offline",
-            headers: new Headers({ 'Content-Type': 'text/plain' })
-          });
-        });
-      })
-    );
-  }
+      });
+    })
+  );
 });
