@@ -29,7 +29,7 @@ Mamaki Content Manager is an offline-first web application built with Node.js an
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v14 or later)
+- [Node.js](https://nodejs.org/) (v20 or later)
 - [npm](https://www.npmjs.com/) (comes with Node.js)
 - A modern browser that supports IndexedDB and Service Workers (Chrome, Firefox, Edge, etc.)
 
@@ -37,6 +37,5 @@ Mamaki Content Manager is an offline-first web application built with Node.js an
 
 1. **Clone the repository:**
 
-   ```bash
-   git clone https://github.com/yourusername/mamaki-content-manager.git
-   cd mamaki-content-manager
+
+ 
