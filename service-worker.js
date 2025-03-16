@@ -1,8 +1,7 @@
-// Generate a unique cache name based on the current timestamp 
-const CACHE_VERSION = new Date().toISOString().replace(/:/g, '-');
-const CACHE_NAME = `mamaki-cache-${CACHE_VERSION}`;
-
-const urlsToCache = [
+// Generate cache
+const LIVE_CACHE = 'mamaki-v1';
+const TEMP_CACHE = 'mamaki-temp-v1';
+const ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
@@ -16,69 +15,80 @@ const urlsToCache = [
   '/icon-512x512.png'
 ];
 
-// Install event: Cache essential assets
+// Install: Download all assets into a temporary cache.
 self.addEventListener('install', event => {
-  console.log('[Service Worker] Installing and caching static assets');
-  // Force the waiting service worker to become active immediately.
-  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => {
-        return cache.addAll(urlsToCache);
+    caches.open(TEMP_CACHE).then(tempCache => {
+      // Fetch and cache every asset.
+      return Promise.all(
+        ASSETS.map(url => {
+          return fetch(url).then(response => {
+            if (!response.ok) {
+              throw new Error(`Failed to fetch ${url}`);
+            }
+            return tempCache.put(url, response.clone());
+          });
+        })
+      );
+    })
+  );
+});
+
+// Activate: If staging is complete, replace the live cache.
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    (async () => {
+      const tempCache = await caches.open(TEMP_CACHE);
+      const cachedRequests = await tempCache.keys();
+      if (cachedRequests.length === ASSETS.length) {
+        // New version is fully staged. Delete the old live cache.
+        await caches.delete(LIVE_CACHE);
+        const liveCache = await caches.open(LIVE_CACHE);
+        // Copy everything from the temporary cache to the live cache.
+        for (const request of cachedRequests) {
+          const response = await tempCache.match(request);
+          await liveCache.put(request, response);
+        }
+        // Delete the temporary cache.
+        await caches.delete(TEMP_CACHE);
+        // Optionally, notify clients to reload.
+        const clients = await self.clients.matchAll();
+        clients.forEach(client => client.postMessage({ action: 'reload' }));
+      } else {
+        // If staging failed, delete the temporary cache and keep the old live cache.
+        console.error('Staging failed. Keeping the old cache.');
+        await caches.delete(TEMP_CACHE);
+      }
+      await self.clients.claim();
+    })()
+  );
+});
+
+// Fetch: Always try the network first, but fall back to live cache if offline.
+self.addEventListener('fetch', event => {
+  event.respondWith(
+    fetch(event.request)
+      .then(networkResponse => {
+        // Update the live cache with the fresh response.
+        const responseClone = networkResponse.clone();
+        caches.open(LIVE_CACHE).then(cache => {
+          cache.put(event.request, responseClone);
+        });
+        return networkResponse;
+      })
+      .catch(() => {
+        // If network fails, try to serve from the live cache.
+        return caches.match(event.request).then(cachedResponse => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          // Optionally, return a fallback for unmatched requests.
+          return new Response('Network error occurred', {
+            status: 408,
+            statusText: 'Network error'
+          });
+        });
       })
   );
 });
 
-// Activate event: Clean up old caches and notify clients to reload.
-self.addEventListener('activate', event => {
-  console.log('[Service Worker] Activating Service Worker');
-  event.waitUntil(
-    caches.keys().then(cacheNames => {
-      // Delete all caches that do not match the current CACHE_NAME
-      return Promise.all(
-        cacheNames.map(cache => {
-          if (cache !== CACHE_NAME) {
-            console.log('[Service Worker] Deleting old cache:', cache);
-            return caches.delete(cache);
-          }
-        })
-      );
-    })
-    .then(() => {
-      // Claim clients immediately so that the new service worker takes effect.
-      return self.clients.claim();
-    })
-    .then(() => {
-      // Notify all clients to reload with the new version.
-      return self.clients.matchAll().then(clients => {
-        clients.forEach(client => {
-          client.postMessage({ action: 'reload' });
-        });
-      });
-    })
-  );
-});
-
-self.addEventListener('fetch', event => {
-  event.respondWith(
-    caches.match(event.request).then(response => {
-      return response || fetch(event.request).catch(() => {
-        if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
-        }
-        // Always return a fallback Response.
-        return new Response('Network error occurred', {
-          status: 408,
-          statusText: 'Network error'
-        });
-      });
-    })
-  );
-});
-
-
-function clearCaches() {
-  return caches.keys().then(cacheNames => {
-    return Promise.all(cacheNames.map(name => caches.delete(name)));
-  });
-}
