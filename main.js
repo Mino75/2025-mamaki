@@ -1,16 +1,4 @@
 
-  // ---------------------- Service Worker Registration ----------------------
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/service-worker.js').then(registration => {
-      console.log('Service Worker Registered');
-      navigator.serviceWorker.addEventListener('message', event => {
-        if (event.data.action === 'reload') {
-          console.log('New version available. Reloading page.');
-          window.location.reload();
-        }
-      });
-    });
-  }
 
   // ---------------------- Global Variables ----------------------
   let sites = []; // Array of site objects loaded from default-sites.json.
